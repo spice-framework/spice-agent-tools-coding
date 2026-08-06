@@ -1,0 +1,69 @@
+package coding
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestNewNormalizesDefaultsAndDisclosesCapabilities(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "worktree")
+	suite, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := suite.Config()
+	if config.Root != filepath.Clean(root) || config.MaxReadBytes != defaultMaxReadBytes ||
+		config.MaxWriteBytes != defaultMaxWriteBytes || config.MaxOutputBytes != defaultMaxOutput ||
+		config.CommandTimeout != defaultTimeout {
+		t.Fatalf("Suite.Config() = %#v", config)
+	}
+	capabilities := suite.Capabilities()
+	if len(capabilities) != 3 || capabilities[0].Name != "read" ||
+		capabilities[1].Name != "replace" || capabilities[2].Name != "shell" {
+		t.Fatalf("Suite.Capabilities() = %#v", capabilities)
+	}
+	capabilities[0].Name = "changed"
+	if suite.Capabilities()[0].Name != "read" {
+		t.Fatal("Suite.Capabilities() did not return a defensive copy")
+	}
+}
+
+func TestNewRejectsInvalidBounds(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "worktree")
+	tests := []struct {
+		name   string
+		config Config
+		want   string
+	}{
+		{name: "relative root", config: Config{Root: "relative"}, want: "absolute path"},
+		{name: "read low", config: Config{Root: root, MaxReadBytes: -1}, want: "max read bytes"},
+		{name: "write high", config: Config{Root: root, MaxWriteBytes: maximumBytes + 1}, want: "max write bytes"},
+		{name: "output high", config: Config{Root: root, MaxOutputBytes: maximumBytes + 1}, want: "max output bytes"},
+		{name: "timeout low", config: Config{Root: root, CommandTimeout: -time.Second}, want: "command timeout"},
+		{name: "timeout high", config: Config{Root: root, CommandTimeout: 31 * time.Minute}, want: "command timeout"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := New(test.config)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("New() error = %v, want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestSecurityWarningAndManifest(t *testing.T) {
+	t.Parallel()
+	if !strings.Contains(SecurityWarning, "no sandbox") || !strings.Contains(SecurityWarning, "process privileges") {
+		t.Fatalf("SecurityWarning = %q", SecurityWarning)
+	}
+	spec := Manifest().Spec()
+	if spec.Module != "github.com/spice-framework/spice-agent-tools-coding" || len(spec.Capabilities) != 3 {
+		t.Fatalf("Manifest().Spec() = %#v", spec)
+	}
+}

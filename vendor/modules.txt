@@ -1,0 +1,87 @@
+# github.com/spice-framework/spice v0.1.0-preview.1
+## explicit; go 1.26.0
+github.com/spice-framework/spice/annotation
+github.com/spice-framework/spice/annotation/sdk
+github.com/spice-framework/spice/annotation/sdk/protocol
+github.com/spice-framework/spice/annotation/sdk/starter
+github.com/spice-framework/spice/config
+github.com/spice-framework/spice/conversion
+github.com/spice-framework/spice/expression
+github.com/spice-framework/spice/security
+github.com/spice-framework/spice/starter
+github.com/spice-framework/spice/validation
+github.com/spice-framework/spice/web
+# github.com/spice-framework/toolchain v0.1.0-preview.1
+## explicit; go 1.26.0
+github.com/spice-framework/toolchain/cmd/spice
+github.com/spice-framework/toolchain/compiler/annotationcatalog
+github.com/spice-framework/toolchain/compiler/annotationhost
+github.com/spice-framework/toolchain/compiler/annotationimport
+github.com/spice-framework/toolchain/compiler/annotationinstall
+github.com/spice-framework/toolchain/compiler/application
+github.com/spice-framework/toolchain/compiler/async
+github.com/spice-framework/toolchain/compiler/autoconfigure
+github.com/spice-framework/toolchain/compiler/bootstrap
+github.com/spice-framework/toolchain/compiler/cache
+github.com/spice-framework/toolchain/compiler/configuration
+github.com/spice-framework/toolchain/compiler/controller
+github.com/spice-framework/toolchain/compiler/descriptor
+github.com/spice-framework/toolchain/compiler/diagnostic
+github.com/spice-framework/toolchain/compiler/diagnostic/adapt
+github.com/spice-framework/toolchain/compiler/event
+github.com/spice-framework/toolchain/compiler/generate
+github.com/spice-framework/toolchain/compiler/graph
+github.com/spice-framework/toolchain/compiler/lifecycle
+github.com/spice-framework/toolchain/compiler/load
+github.com/spice-framework/toolchain/compiler/modulith
+github.com/spice-framework/toolchain/compiler/parser
+github.com/spice-framework/toolchain/compiler/provider
+github.com/spice-framework/toolchain/compiler/resolve
+github.com/spice-framework/toolchain/compiler/scan
+github.com/spice-framework/toolchain/compiler/schedule
+github.com/spice-framework/toolchain/compiler/service
+github.com/spice-framework/toolchain/compiler/signature
+github.com/spice-framework/toolchain/compiler/starter
+github.com/spice-framework/toolchain/compiler/targetid
+github.com/spice-framework/toolchain/compiler/transaction
+github.com/spice-framework/toolchain/compiler/validate
+github.com/spice-framework/toolchain/internal/cli
+github.com/spice-framework/toolchain/internal/devloop
+github.com/spice-framework/toolchain/internal/genfs
+github.com/spice-framework/toolchain/internal/identity
+github.com/spice-framework/toolchain/internal/lsp
+github.com/spice-framework/toolchain/internal/moduleenv
+github.com/spice-framework/toolchain/internal/scaffold
+# golang.org/x/mod v0.38.0
+## explicit; go 1.25.0
+golang.org/x/mod/internal/lazyregexp
+golang.org/x/mod/modfile
+golang.org/x/mod/module
+golang.org/x/mod/semver
+# golang.org/x/sync v0.22.0
+## explicit; go 1.25.0
+golang.org/x/sync/errgroup
+# golang.org/x/sys v0.47.0
+## explicit; go 1.25.0
+golang.org/x/sys/windows
+# golang.org/x/tools v0.48.0
+## explicit; go 1.25.0
+golang.org/x/tools/go/ast/edge
+golang.org/x/tools/go/ast/inspector
+golang.org/x/tools/go/gcexportdata
+golang.org/x/tools/go/packages
+golang.org/x/tools/go/types/objectpath
+golang.org/x/tools/go/types/typeutil
+golang.org/x/tools/internal/aliases
+golang.org/x/tools/internal/event
+golang.org/x/tools/internal/event/core
+golang.org/x/tools/internal/event/keys
+golang.org/x/tools/internal/event/label
+golang.org/x/tools/internal/gcimporter
+golang.org/x/tools/internal/gocommand
+golang.org/x/tools/internal/packagesinternal
+golang.org/x/tools/internal/pkgbits
+golang.org/x/tools/internal/stdlib
+golang.org/x/tools/internal/typeparams
+golang.org/x/tools/internal/typesinternal
+golang.org/x/tools/internal/versions

@@ -1,0 +1,19 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions: {}
+
+jobs:
+  release:
+    name: Centrally verify, sign, and publish
+    permissions:
+      contents: write
+    uses: spice-framework/.github/.github/workflows/library-release.yml@9ae80e32f64b29697acd9ebe629468850b4ae9f2
+    with:
+      module: github.com/spice-framework/spice-agent-tools-coding
+    secrets:
+      SPICE_LIBRARY_RELEASE_SIGNING_KEY: ${{ secrets.SPICE_LIBRARY_RELEASE_SIGNING_KEY }}

@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: spice-framework/.github/.github/workflows/go-verify.yml@0534fe1247f892b287f624b7abb6f2347765ab22
+    with:
+      go-version: 1.26.5
+
+  quality:
+    name: Repository quality contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Set up exact Go toolchain
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - name: Run complete local quality contract
+        run: go run ./internal/qualitygate -mode=verify
+
+  required:
+    name: Required CI
+    if: always()
+    needs: [verify, quality]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to pass
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+        run: |
+          test "$VERIFY_RESULT" = "success"
+          test "$QUALITY_RESULT" = "success"

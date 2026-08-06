@@ -1,0 +1,126 @@
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+  modules-download-mode: vendor
+  allow-serial-runners: true
+
+linters:
+  default: none
+  enable:
+    - asciicheck
+    - bidichk
+    - containedctx
+    - cyclop
+    - depguard
+    - durationcheck
+    - errcheck
+    - errorlint
+    - fatcontext
+    - forbidigo
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - gocritic
+    - godoclint
+    - govet
+    - ineffassign
+    - maintidx
+    - modernize
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - predeclared
+    - recvcheck
+    - revive
+    - sloglint
+    - staticcheck
+    - testableexamples
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - unused
+    - usestdlibvars
+    - wastedassign
+  settings:
+    cyclop:
+      max-complexity: 15
+      package-average: 10
+    depguard:
+      rules:
+        public-tools:
+          list-mode: lax
+          files:
+            - "*.go"
+          deny:
+            - pkg: "github.com/spice-framework/spice/compiler"
+              desc: "tool packages must not depend on compiler packages"
+            - pkg: "github.com/spice-framework/spice/internal"
+              desc: "tool packages must not depend on Spice internals"
+            - pkg: "github.com/spice-framework/spice/cmd"
+              desc: "tool packages must not depend on command entrypoints"
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: "write through an injected io.Writer or structured logger"
+        - pattern: '^log\.Fatal(f|ln)?$'
+          msg: "return an error to the entrypoint"
+        - pattern: '^os\.Exit$'
+          msg: "return an error and let an entrypoint select the exit code"
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+    maintidx:
+      under: 20
+    nolintlint:
+      require-specific: true
+      require-explanation: true
+    revive:
+      severity: warning
+      rules:
+        - name: comment-spacings
+          arguments:
+            - "@"
+    staticcheck:
+      checks:
+        - all
+  exclusions:
+    generated: strict
+    warn-unused: true
+    rules:
+      - path: "_test\\.go$"
+        linters:
+          - cyclop
+          - forbidigo
+          - maintidx
+          - noctx
+      - path: "internal[/\\\\]qualitygate[/\\\\]main\\.go$"
+        text: 'use of `os\.Exit`'
+        linters:
+          - forbidigo
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    gofumpt:
+      module-path: github.com/spice-framework/spice-agent-tools-coding
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: true
+
+output:
+  sort-order:
+    - file
+    - linter
