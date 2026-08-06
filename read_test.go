@@ -30,20 +30,20 @@ func TestReadFullPagePagingAndBinaryEncoding(t *testing.T) {
 		definition.Capabilities()[0] != tool.CapabilityFilesystemRead {
 		t.Fatalf("Definition() = %#v", definition)
 	}
-	full := decodeContent[readContent](t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{
+	full := decodeContent[readContent](t, executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{
 		"path": "value.txt",
 	}), nil))
 	digest := sha256.Sum256(content)
 	if !full.OK || full.Content != string(content) || full.SHA256 != hex.EncodeToString(digest[:]) || full.Truncated {
 		t.Fatalf("full read = %#v", full)
 	}
-	first := decodeContent[readContent](t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{
+	first := decodeContent[readContent](t, executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{
 		"path": "value.txt", "limit": 4,
 	}), nil))
 	if first.Content != "abcd" || !first.Truncated || first.NextOffset != 4 || first.SHA256 != "" {
 		t.Fatalf("first page = %#v", first)
 	}
-	second := decodeContent[readContent](t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{
+	second := decodeContent[readContent](t, executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{
 		"path": "value.txt", "offset": 4, "limit": 4,
 	}), nil))
 	if second.Content != "efgh" || second.Truncated || second.Offset != 4 {
@@ -53,7 +53,7 @@ func TestReadFullPagePagingAndBinaryEncoding(t *testing.T) {
 	if writeErr := os.WriteFile(filepath.Join(root, "binary"), binary, 0o600); writeErr != nil {
 		t.Fatal(writeErr)
 	}
-	binaryResult := decodeContent[readContent](t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{
+	binaryResult := decodeContent[readContent](t, executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{
 		"path": "binary",
 	}), nil))
 	decoded, err := base64.StdEncoding.DecodeString(binaryResult.Content)
@@ -73,7 +73,7 @@ func TestReadFallsBackToBoundedBase64Result(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result := reader.Execute(t.Context(), makeCall(t, "read", map[string]any{"path": "controls"}), nil)
+	result := executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{"path": "controls"}), nil)
 	decodedResult := decodeContent[readContent](t, result)
 	decoded, decodeErr := base64.StdEncoding.DecodeString(decodedResult.Content)
 	if decodeErr != nil || decodedResult.Encoding != "base64" || !bytes.Equal(decoded, content) {
@@ -111,7 +111,7 @@ func TestReadRejectsEscapeInvalidRangesAndUnknownArguments(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			result := reader.Execute(t.Context(), makeCall(t, test.toolName, test.arguments), nil)
+			result := executeResult(t, reader, t.Context(), makeCall(t, test.toolName, test.arguments), nil)
 			requireProblem(t, result, test.problem)
 		})
 	}
@@ -120,7 +120,7 @@ func TestReadRejectsEscapeInvalidRangesAndUnknownArguments(t *testing.T) {
 		t.Logf("symlink test skipped: %v", err)
 		return
 	}
-	requireProblem(t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{"path": "escape"}), nil), "unavailable")
+	requireProblem(t, executeResult(t, reader, t.Context(), makeCall(t, "read", map[string]any{"path": "escape"}), nil), "unavailable")
 }
 
 func TestReadHonorsCancellationAndReporterFailure(t *testing.T) {
@@ -135,9 +135,12 @@ func TestReadHonorsCancellationAndReporterFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	requireProblem(t, reader.Execute(ctx, makeCall(t, "read", map[string]any{"path": "value"}), nil), "cancelled")
+	call := makeCall(t, "read", map[string]any{"path": "value"})
+	requireExecutionError(t, reader, ctx, call, nil, tool.ExecutionDefinitive, tool.RetryAllowed, context.Canceled)
 	reporter := reporterFunc(func(context.Context, tool.Progress) error { return errors.New("reject") })
-	requireProblem(t, reader.Execute(t.Context(), makeCall(t, "read", map[string]any{"path": "value"}), reporter), "rejected")
+	requireExecutionError(
+		t, reader, t.Context(), call, reporter, tool.ExecutionDefinitive, tool.RetryAllowed, nil,
+	)
 }
 
 func TestReadRejectsInvalidConfigurationAndUnavailableFiles(t *testing.T) {
@@ -168,14 +171,14 @@ func TestReadRejectsInvalidConfigurationAndUnavailableFiles(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			requireProblem(t, reader.Execute(t.Context(), makeCall(t, "read", test.arguments), nil), test.problem)
+			requireProblem(t, executeResult(t, reader, t.Context(), makeCall(t, "read", test.arguments), nil), test.problem)
 		})
 	}
 	missingRoot, err := NewRead(Config{Root: filepath.Join(root, "missing-root")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProblem(t, missingRoot.Execute(t.Context(), makeCall(t, "read", map[string]any{"path": "value"}), nil),
+	requireProblem(t, executeResult(t, missingRoot, t.Context(), makeCall(t, "read", map[string]any{"path": "value"}), nil),
 		"unavailable")
 }
 

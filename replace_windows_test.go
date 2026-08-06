@@ -38,7 +38,7 @@ func TestReplaceRetriesSharingViolationWithFreshStaleCheck(t *testing.T) {
 		return renameWithinRoot(workspace, oldName, newName)
 	}
 	digest := sha256.Sum256([]byte("first"))
-	result := replacer.Execute(t.Context(), makeCall(t, "replace", map[string]any{
+	result := executeResult(t, replacer, t.Context(), makeCall(t, "replace", map[string]any{
 		"path": "value", "content": "second", "expected_sha256": hex.EncodeToString(digest[:]),
 	}), nil)
 	content := decodeContent[replaceContent](t, result)
@@ -127,8 +127,10 @@ func TestReplaceCancelsDuringWindowsRenameRetry(t *testing.T) {
 		cancel()
 		return windows.ERROR_SHARING_VIOLATION
 	}
-	result := replacer.Execute(ctx, windowsRenameCall(t), nil)
-	requireProblem(t, result, "cancelled")
+	call := windowsRenameCall(t)
+	requireExecutionError(
+		t, replacer, ctx, call, nil, tool.ExecutionDefinitive, tool.RetryAllowed, context.Canceled,
+	)
 	if attempts != 1 {
 		t.Fatalf("rename attempts = %d, want 1", attempts)
 	}
@@ -182,5 +184,5 @@ func windowsRenameCall(t *testing.T) tool.Call {
 
 func executeWindowsRenameTest(t *testing.T, replacer *replaceTool) tool.Result {
 	t.Helper()
-	return replacer.Execute(t.Context(), windowsRenameCall(t), nil)
+	return executeResult(t, replacer, t.Context(), windowsRenameCall(t), nil)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"unicode/utf8"
 
@@ -49,6 +50,8 @@ func NewRead(config Config) (tool.Tool, error) {
 		"read",
 		"Read one bounded page from a file inside the configured worktree.",
 		json.RawMessage(readInputSchema),
+		tool.EffectReadOnly,
+		tool.ReplaySafe,
 		tool.CapabilityFilesystemRead,
 	)
 	if err != nil {
@@ -59,40 +62,52 @@ func NewRead(config Config) (tool.Tool, error) {
 
 func (reader *readTool) Definition() tool.Definition { return reader.definition.Clone() }
 
-func (reader *readTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) tool.Result {
+func (reader *readTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
 	if err := validateCall(call, reader.definition.Name()); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
-	if err := contextFailure(ctx); err != nil {
-		return failureResult(call.ID(), err)
+	if result, err, stop := initialContextOutcome(ctx, call.ID(), tool.RetryAllowed); stop {
+		return result, err
 	}
 	var arguments readArguments
 	if err := decodeArguments(call.Arguments(), &arguments); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
 	if arguments.Offset < 0 {
-		return failureResult(call.ID(), invalidArguments("read offset must not be negative"))
+		return modelFailure(call.ID(), invalidArguments("read offset must not be negative"))
 	}
 	if arguments.Limit == 0 {
 		arguments.Limit = reader.config.MaxReadBytes
 	}
 	if arguments.Limit < 1 || arguments.Limit > reader.config.MaxReadBytes {
-		return failureResult(call.ID(), invalidArguments("read limit exceeds the configured per-call bound"))
+		return modelFailure(call.ID(), invalidArguments("read limit exceeds the configured per-call bound"))
 	}
-	if err := reportProgress(ctx, reporter, call.ID(), "reading bounded file page"); err != nil {
-		return failureResult(call.ID(), err)
+	if err := reportProgress(
+		ctx, reporter, call.ID(), "reading bounded file page", tool.RetryAllowed,
+	); err != nil {
+		return tool.Result{}, err
 	}
 	content, err := reader.read(ctx, arguments)
 	if err != nil {
-		return failureResult(call.ID(), err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return tool.Result{}, cancellationFailure(call.ID(), tool.RetryAllowed, err)
+		}
+		return modelFailure(call.ID(), err)
 	}
 	result, err := newSuccessResult(call.ID(), content)
 	if err == nil {
-		return result
+		return result, nil
 	}
 	content.Encoding = "base64"
 	content.Content = base64.StdEncoding.EncodeToString([]byte(content.Content))
-	return successResult(call.ID(), content)
+	result, err = successResult(call.ID(), content)
+	if err != nil {
+		return tool.Result{}, infrastructureFailure(
+			call.ID(), tool.ExecutionDefinitive, tool.RetryAllowed,
+			"read result could not be encoded",
+		)
+	}
+	return result, nil
 }
 
 func (reader *readTool) read(ctx context.Context, arguments readArguments) (readContent, error) {

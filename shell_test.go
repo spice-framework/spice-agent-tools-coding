@@ -32,23 +32,23 @@ func TestShellExecutesDiscreteArgvWorkdirAndEnvironmentPolicy(t *testing.T) {
 	}
 	definition := shell.Definition()
 	if definition.Name() != "shell" || len(definition.Capabilities()) != 7 ||
-		definition.Capabilities()[2] != tool.CapabilityProcessExecute {
+		definition.Effect() != tool.EffectMutating || definition.ReplaySafety() != tool.ReplayUnsafe {
 		t.Fatalf("Definition() = %#v", definition)
 	}
-	echo := decodeContent[shellContent](t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	echo := decodeContent[shellContent](t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("echo", "stdout", "stderr"), "workdir": "nested",
 	}), nil))
 	if !echo.OK || echo.Stdout != "stdout" || echo.Stderr != "stderr" || echo.Workdir != "nested" ||
-		!echo.TerminationConfirmed {
+		!echo.ManagedCleanupCompleted {
 		t.Fatalf("echo result = %#v", echo)
 	}
-	environment := decodeContent[shellContent](t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	environment := decodeContent[shellContent](t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("env", "SPICE_SAFE", "SPICE_SECRET"),
 	}), nil))
 	if environment.Stdout != "visible|" {
 		t.Fatalf("environment result = %#v", environment)
 	}
-	workingDirectory := decodeContent[shellContent](t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	workingDirectory := decodeContent[shellContent](t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("cwd"), "workdir": "nested",
 	}), nil))
 	if filepath.Clean(workingDirectory.Stdout) != filepath.Clean(workdir) {
@@ -63,13 +63,13 @@ func TestShellBoundsOutputAndPreservesNonzeroOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bounded := decodeContent[shellContent](t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	bounded := decodeContent[shellContent](t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("flood", "1000"),
 	}), nil))
 	if !bounded.OK || !bounded.OutputTruncated || bounded.StdoutBytes != 1000 || len(bounded.Stdout) > 32 {
 		t.Fatalf("bounded output = %#v", bounded)
 	}
-	failed := shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	failed := executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("fail", "diagnostic"),
 	}), nil)
 	requireProblem(t, failed, "status 7")
@@ -79,7 +79,7 @@ func TestShellBoundsOutputAndPreservesNonzeroOutcome(t *testing.T) {
 	}
 }
 
-func TestShellCancellationTerminatesProcessTree(t *testing.T) {
+func TestShellCancellationTerminatesManagedProcessTree(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	pidFile := filepath.Join(root, "child.pid")
@@ -90,18 +90,23 @@ func TestShellCancellationTerminatesProcessTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	resultChannel := make(chan tool.Result, 1)
+	type executionOutcome struct {
+		result tool.Result
+		err    error
+	}
+	resultChannel := make(chan executionOutcome, 1)
 	call := makeCall(t, "shell", map[string]any{"argv": helperArgv("spawn", pidFile)})
-	go func() { resultChannel <- shell.Execute(ctx, call, nil) }()
+	go func() {
+		result, executeErr := shell.Execute(ctx, call, nil)
+		resultChannel <- executionOutcome{result: result, err: executeErr}
+	}()
 	pid := waitForChildPID(t, pidFile)
 	cancel()
 	select {
-	case result := <-resultChannel:
-		requireProblem(t, result, "cancelled")
-		content := decodeContent[shellContent](t, result)
-		if !content.Cancelled || content.TimedOut || !content.TerminationConfirmed {
-			t.Fatalf("cancelled command = %#v", content)
-		}
+	case outcome := <-resultChannel:
+		requireExecutionFailure(
+			t, outcome.result, outcome.err, call.ID(), tool.ExecutionUncertain, tool.RetryNever, context.Canceled,
+		)
 	case <-time.After(10 * time.Second):
 		t.Fatal("cancelled shell call did not return")
 	}
@@ -109,8 +114,36 @@ func TestShellCancellationTerminatesProcessTree(t *testing.T) {
 	process, err := os.FindProcess(pid)
 	if err == nil {
 		if killErr := process.Kill(); killErr == nil {
-			t.Fatal("child process survived process-tree cancellation")
+			t.Fatal("managed child survived process-group or Job Object cancellation")
 		}
+	}
+}
+
+func TestManagedCleanupDoesNotClaimDetachedDescendants(t *testing.T) {
+	t.Parallel()
+	pidFile := filepath.Join(t.TempDir(), "detached.pid")
+	ctx, cancel := context.WithCancel(t.Context())
+	// #nosec G204 -- the test executes its fixed helper with a test-owned PID path.
+	command := exec.Command(
+		os.Args[0], "-test.run=TestShellHelperProcess", "--",
+		shellHelperMarker, "spawn-detached", pidFile,
+	)
+	outcome := runProcessWithHooks(ctx, command, 20*time.Second, processHooks{
+		afterStartBeforeAttach: func() {
+			waitForChildPID(t, pidFile)
+			cancel()
+		},
+	})
+	if !outcome.started || !errors.Is(outcome.contextErr, context.Canceled) || outcome.stopErr != nil {
+		t.Fatalf("runProcessWithHooks() outcome = %#v", outcome)
+	}
+	pid := waitForChildPID(t, pidFile)
+	detached, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("find detached process %d: %v", pid, err)
+	}
+	if err := detached.Kill(); err != nil {
+		t.Fatalf("detached process did not demonstrate the documented cleanup boundary: %v", err)
 	}
 }
 
@@ -123,12 +156,12 @@ func TestShellTimeoutAndArgumentFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	timedOut := shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	timedOut := executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("sleep"),
 	}), nil)
 	requireProblem(t, timedOut, "timeout")
 	timedOutContent := decodeContent[shellContent](t, timedOut)
-	if !timedOutContent.TimedOut || !timedOutContent.TerminationConfirmed {
+	if !timedOutContent.TimedOut || !timedOutContent.ManagedCleanupCompleted {
 		t.Fatalf("timeout result = %#v", timedOutContent)
 	}
 	tests := []struct {
@@ -144,7 +177,7 @@ func TestShellTimeoutAndArgumentFailures(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			requireProblem(t, shell.Execute(t.Context(), makeCall(t, "shell", test.arguments), nil), test.problem)
+			requireProblem(t, executeResult(t, shell, t.Context(), makeCall(t, "shell", test.arguments), nil), test.problem)
 		})
 	}
 	outside := t.TempDir()
@@ -152,9 +185,111 @@ func TestShellTimeoutAndArgumentFailures(t *testing.T) {
 		t.Logf("symlink test skipped: %v", err)
 		return
 	}
-	requireProblem(t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	requireProblem(t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("echo", "out", "err"), "workdir": "linked",
 	}), nil), "symbolic-link")
+}
+
+func TestShellCallerDeadlineIsUncertainExecutionFailure(t *testing.T) {
+	t.Parallel()
+	shell, err := NewShell(Config{
+		Root: t.TempDir(), CommandTimeout: 20 * time.Second, EnvironmentAllowlist: []string{"GOCOVERDIR"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	call := makeCall(t, "shell", map[string]any{"argv": helperArgv("sleep")})
+	requireExecutionError(
+		t, shell, ctx, call, nil, tool.ExecutionUncertain, tool.RetryNever, context.DeadlineExceeded,
+	)
+}
+
+func TestRunProcessRechecksCancellationImmediatelyBeforeStart(t *testing.T) {
+	t.Parallel()
+	marker := filepath.Join(t.TempDir(), "started")
+	ctx, cancel := context.WithCancel(t.Context())
+	// #nosec G204 -- the test executes its fixed helper with a test-owned marker path.
+	command := exec.Command(os.Args[0], "-test.run=TestShellHelperProcess", "--", shellHelperMarker, "mark", marker)
+	outcome := runProcessWithHooks(ctx, command, time.Minute, processHooks{beforeStart: cancel})
+	if outcome.started || !errors.Is(outcome.contextErr, context.Canceled) {
+		t.Fatalf("runProcessWithHooks() outcome = %#v", outcome)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled process created marker: %v", err)
+	}
+}
+
+func TestShellPreStartCancellationIsDefinitive(t *testing.T) {
+	t.Parallel()
+	constructed, err := NewShell(Config{Root: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell, ok := constructed.(*shellTool)
+	if !ok {
+		t.Fatalf("NewShell() type = %T", constructed)
+	}
+	shell.run = func(context.Context, *exec.Cmd, time.Duration) processOutcome {
+		return processOutcome{contextErr: context.Canceled}
+	}
+	call := makeCall(t, "shell", map[string]any{
+		"argv": helperArgv("echo", "unused", "unused"),
+	})
+	requireExecutionError(
+		t, shell, t.Context(), call, nil, tool.ExecutionDefinitive, tool.RetryNever, context.Canceled,
+	)
+}
+
+func TestShellUnconfirmedStartedProcessOutcomesAreInfrastructureFailures(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		outcome processOutcome
+	}{
+		{
+			name: "configured timeout",
+			outcome: processOutcome{
+				started: true, timedOut: true, stopErr: errors.New("termination unavailable"),
+			},
+		},
+		{
+			name: "attach failure after start",
+			outcome: processOutcome{
+				started: true, waitErr: errors.New("wait failed"), stopErr: errors.New("attach and cleanup failed"),
+			},
+		},
+		{
+			name:    "cleanup failure after completion",
+			outcome: processOutcome{started: true, stopErr: errors.New("cleanup failed")},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			constructed, err := NewShell(Config{Root: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			shell, ok := constructed.(*shellTool)
+			if !ok {
+				t.Fatalf("NewShell() type = %T", constructed)
+			}
+			shell.run = func(context.Context, *exec.Cmd, time.Duration) processOutcome {
+				return test.outcome
+			}
+			call := makeCall(t, "shell", map[string]any{
+				"argv": helperArgv("echo", "unused", "unused"),
+			})
+			failure := requireExecutionErrorValue(
+				t, shell, t.Context(), call, nil, tool.ExecutionUncertain, tool.RetryNever, nil,
+			)
+			if strings.Contains(failure.Error(), test.outcome.stopErr.Error()) {
+				t.Fatalf("execution failure exposed raw process detail: %q", failure)
+			}
+		})
+	}
 }
 
 func TestShellRejectsInvalidConfigurationReporterAndExecutionTargets(t *testing.T) {
@@ -171,20 +306,20 @@ func TestShellRejectsInvalidConfigurationReporterAndExecutionTargets(t *testing.
 		t.Fatal(err)
 	}
 	reporter := reporterFunc(func(context.Context, tool.Progress) error { return errors.New("reject") })
-	requireProblem(t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	requireExecutionError(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("echo", "out", "err"),
-	}), reporter), "rejected")
-	requireProblem(t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	}), reporter, tool.ExecutionDefinitive, tool.RetryNever, nil)
+	requireProblem(t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": []string{filepath.Join(root, "definitely-missing-executable")},
 	}), nil), "started")
-	requireProblem(t, shell.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	requireProblem(t, executeResult(t, shell, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("echo", "out", "err"), "workdir": "file",
 	}), nil), "unavailable")
 	missingRoot, err := NewShell(Config{Root: filepath.Join(root, "missing-root")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireProblem(t, missingRoot.Execute(t.Context(), makeCall(t, "shell", map[string]any{
+	requireProblem(t, executeResult(t, missingRoot, t.Context(), makeCall(t, "shell", map[string]any{
 		"argv": helperArgv("echo", "out", "err"),
 	}), nil), "unavailable")
 }
@@ -199,22 +334,27 @@ func TestShellResultEncodingAndUncertainProcessOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	captured := capturedShellContent(relativePath{display: ".", native: "."}, stdout, stderr, processOutcome{})
-	if captured.Encoding != "base64" || captured.ExitCode != 0 || !captured.TerminationConfirmed {
+	if captured.Encoding != "base64" || captured.ExitCode != 0 || !captured.ManagedCleanupCompleted {
 		t.Fatalf("capturedShellContent() = %#v", captured)
 	}
 
 	callID := tool.CallID(t.Name())
 	controls := strings.Repeat("\x00", 180<<10)
-	result := encodeShellResult(callID, shellContent{OK: true, Encoding: "utf-8", Stdout: controls}, "")
+	result, resultErr := encodeShellResult(callID, shellContent{OK: true, Encoding: "utf-8", Stdout: controls}, "")
+	if resultErr != nil {
+		t.Fatal(resultErr)
+	}
 	encoded := decodeContent[shellContent](t, result)
 	decoded, err := base64.StdEncoding.DecodeString(encoded.Stdout)
 	if err != nil || encoded.Encoding != "base64" || string(decoded) != controls {
 		t.Fatalf("encoded shell result = encoding %q, bytes %d, error %v", encoded.Encoding, len(decoded), err)
 	}
-	tooLarge := encodeShellResult(callID, shellContent{
+	tooLarge, tooLargeErr := encodeShellResult(callID, shellContent{
 		OK: true, Encoding: "base64", Stdout: strings.Repeat("x", tool.MaximumPayloadBytes),
 	}, "")
-	requireProblem(t, tooLarge, "exceeds")
+	if tooLargeErr == nil || !tooLarge.IsZero() {
+		t.Fatalf("encodeShellResult(too large) = %#v, %v", tooLarge, tooLargeErr)
+	}
 
 	stopFailure := errors.New("termination unknown")
 	for _, test := range []struct {
@@ -222,17 +362,24 @@ func TestShellResultEncodingAndUncertainProcessOutcomes(t *testing.T) {
 		outcome processOutcome
 		want    string
 	}{
-		{name: "timeout", outcome: processOutcome{timedOut: true, stopErr: stopFailure}, want: "timed out"},
-		{name: "cancel", outcome: processOutcome{cancelled: true, stopErr: stopFailure}, want: "cancelled"},
-		{name: "cleanup", outcome: processOutcome{stopErr: stopFailure}, want: "cleanup"},
+		{
+			name: "timeout", outcome: processOutcome{started: true, timedOut: true, stopErr: stopFailure},
+			want: "timed out",
+		},
+		{name: "cleanup", outcome: processOutcome{started: true, stopErr: stopFailure}, want: "cleanup"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			problem, classifyErr := classifyProcessOutcome(test.outcome)
-			if classifyErr != nil || !strings.Contains(problem, test.want) {
+			if classifyErr == nil || problem != "" || !strings.Contains(classifyErr.Error(), test.want) {
 				t.Fatalf("classifyProcessOutcome() = %q, %v", problem, classifyErr)
 			}
 		})
+	}
+	if _, err := classifyProcessOutcome(processOutcome{
+		started: true, contextErr: context.Canceled, stopErr: stopFailure,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("classifyProcessOutcome(cancelled) error = %v", err)
 	}
 	if _, err := classifyProcessOutcome(processOutcome{waitErr: errors.New("start failure")}); err == nil ||
 		!strings.Contains(err.Error(), "started") {
@@ -298,19 +445,28 @@ func TestShellHelperProcess(t *testing.T) {
 	case "fail":
 		writeHelperOutput(os.Stderr, []byte(arguments[1]))
 		os.Exit(7)
+	case "mark":
+		if err := os.WriteFile(arguments[1], []byte("started"), 0o600); err != nil {
+			os.Exit(98)
+		}
 	case "sleep":
 		time.Sleep(30 * time.Second)
 	case "spawn":
-		spawnHelperChild(arguments[1])
+		spawnHelperChild(arguments[1], false)
+	case "spawn-detached":
+		spawnHelperChild(arguments[1], true)
 	default:
 		os.Exit(93)
 	}
 	os.Exit(0)
 }
 
-func spawnHelperChild(pidFile string) {
+func spawnHelperChild(pidFile string, detached bool) {
 	// #nosec G204 -- test helper uses the current fixed test executable and discrete arguments.
 	child := exec.Command(os.Args[0], "-test.run=TestShellHelperProcess", "--", shellHelperMarker, "sleep")
+	if detached {
+		configureDetachedChild(child)
+	}
 	if err := child.Start(); err != nil {
 		os.Exit(94)
 	}

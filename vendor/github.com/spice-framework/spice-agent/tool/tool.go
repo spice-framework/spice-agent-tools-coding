@@ -16,8 +16,10 @@ const (
 	MaximumPayloadBytes = 1 << 20
 	// MaximumProgressBytes bounds one progress message.
 	MaximumProgressBytes = 4096
-	maxMessageBytes      = MaximumProgressBytes
-	maxIdentityBytes     = 128
+	// MaximumExecutionErrorBytes bounds one tool execution failure message.
+	MaximumExecutionErrorBytes = 4096
+	maxMessageBytes            = MaximumProgressBytes
+	maxIdentityBytes           = 128
 )
 
 // CallID identifies one tool operation.
@@ -37,17 +39,46 @@ const (
 	CapabilityEnvironmentWrite Capability = "environment.write"
 )
 
-// Definition is an immutable model-visible tool description. Capability order
-// is declaration order and is significant.
+// Effect classifies whether a successful invocation can mutate external state.
+// It is mandatory policy metadata, not inferred from capabilities or arguments.
+type Effect string
+
+const (
+	EffectReadOnly Effect = "read_only"
+	EffectMutating Effect = "mutating"
+)
+
+// ReplaySafety declares whether an invocation may be deliberately executed
+// again after a definitive infrastructure failure. It never authorizes retry
+// after an uncertain mutation outcome.
+type ReplaySafety string
+
+const (
+	ReplaySafe       ReplaySafety = "safe"
+	ReplayIdempotent ReplaySafety = "idempotent"
+	ReplayUnsafe     ReplaySafety = "unsafe"
+)
+
+// Definition is an immutable model-visible tool description. Capabilities are
+// an unordered set exposed in canonical lexical order.
 type Definition struct {
 	name         string
 	description  string
 	inputSchema  json.RawMessage
+	effect       Effect
+	replaySafety ReplaySafety
 	capabilities []Capability
 }
 
 // NewDefinition validates and defensively copies a tool definition.
-func NewDefinition(name, description string, inputSchema json.RawMessage, capabilities ...Capability) (Definition, error) {
+func NewDefinition(
+	name,
+	description string,
+	inputSchema json.RawMessage,
+	effect Effect,
+	replaySafety ReplaySafety,
+	capabilities ...Capability,
+) (Definition, error) {
 	if err := validateIdentity("tool name", name); err != nil {
 		return Definition{}, err
 	}
@@ -60,6 +91,18 @@ func NewDefinition(name, description string, inputSchema json.RawMessage, capabi
 	if err := validateJSON("tool input schema", inputSchema); err != nil {
 		return Definition{}, err
 	}
+	if !validEffect(effect) {
+		return Definition{}, fmt.Errorf("tool effect %q is unsupported", effect)
+	}
+	if !validReplaySafety(replaySafety) {
+		return Definition{}, fmt.Errorf("tool replay safety %q is unsupported", replaySafety)
+	}
+	if effect == EffectReadOnly && replaySafety != ReplaySafe {
+		return Definition{}, errors.New("read-only tools must declare safe replay")
+	}
+	if effect == EffectMutating && replaySafety == ReplaySafe {
+		return Definition{}, errors.New("mutating tools must declare idempotent or unsafe replay")
+	}
 	seen := make(map[Capability]struct{}, len(capabilities))
 	for _, capability := range capabilities {
 		if !validCapability(capability) {
@@ -68,19 +111,36 @@ func NewDefinition(name, description string, inputSchema json.RawMessage, capabi
 		if _, duplicate := seen[capability]; duplicate {
 			return Definition{}, fmt.Errorf("tool capability %q is duplicated", capability)
 		}
+		if effect == EffectReadOnly && mutationCapable(capability) {
+			return Definition{}, fmt.Errorf(
+				"read-only tool cannot declare mutation-capable capability %q",
+				capability,
+			)
+		}
 		seen[capability] = struct{}{}
 	}
+	normalizedCapabilities := append([]Capability(nil), capabilities...)
+	slices.Sort(normalizedCapabilities)
 	return Definition{
 		name:         name,
 		description:  description,
 		inputSchema:  cloneJSON(inputSchema),
-		capabilities: append([]Capability(nil), capabilities...),
+		effect:       effect,
+		replaySafety: replaySafety,
+		capabilities: normalizedCapabilities,
 	}, nil
 }
 
 // Validate rejects a zero or corrupted definition.
 func (definition Definition) Validate() error {
-	_, err := NewDefinition(definition.name, definition.description, definition.inputSchema, definition.capabilities...)
+	_, err := NewDefinition(
+		definition.name,
+		definition.description,
+		definition.inputSchema,
+		definition.effect,
+		definition.replaySafety,
+		definition.capabilities...,
+	)
 	return err
 }
 
@@ -93,7 +153,13 @@ func (definition Definition) Description() string { return definition.descriptio
 // InputSchema returns a defensive copy.
 func (definition Definition) InputSchema() json.RawMessage { return cloneJSON(definition.inputSchema) }
 
-// Capabilities returns an ordered defensive copy.
+// Effect returns the declared external-state effect.
+func (definition Definition) Effect() Effect { return definition.effect }
+
+// ReplaySafety returns the declared deliberate replay contract.
+func (definition Definition) ReplaySafety() ReplaySafety { return definition.replaySafety }
+
+// Capabilities returns the unordered set in canonical lexical order.
 func (definition Definition) Capabilities() []Capability {
 	return append([]Capability(nil), definition.capabilities...)
 }
@@ -106,6 +172,8 @@ func (definition Definition) Fingerprint() string {
 	writeFingerprintField(hash, []byte(definition.name))
 	writeFingerprintField(hash, []byte(definition.description))
 	writeFingerprintField(hash, definition.inputSchema)
+	writeFingerprintField(hash, []byte(definition.effect))
+	writeFingerprintField(hash, []byte(definition.replaySafety))
 	capabilities := append([]Capability(nil), definition.capabilities...)
 	slices.Sort(capabilities)
 	for _, capability := range capabilities {
@@ -127,7 +195,8 @@ func writeFingerprintField(destination fingerprintWriter, value []byte) {
 
 // SizeBytes returns deterministic request-budget accounting.
 func (definition Definition) SizeBytes() int {
-	total := len(definition.name) + len(definition.description) + len(definition.inputSchema)
+	total := len(definition.name) + len(definition.description) + len(definition.inputSchema) +
+		len(definition.effect) + len(definition.replaySafety)
 	for _, capability := range definition.capabilities {
 		total += len(capability)
 	}
@@ -236,6 +305,12 @@ func (result Result) Content() json.RawMessage { return cloneJSON(result.content
 // Problem returns normalized error text and whether the result is an error.
 func (result Result) Problem() (string, bool) { return result.problem, result.problem != "" }
 
+// IsZero reports whether no terminal result was returned. It is used to reject
+// ambiguous implementations that return both output and an execution failure.
+func (result Result) IsZero() bool {
+	return result.callID == "" && result.content == nil && result.problem == ""
+}
+
 // Clone returns a deep defensive copy.
 func (result Result) Clone() Result {
 	result.content = cloneJSON(result.content)
@@ -279,14 +354,154 @@ type Reporter interface {
 	Report(context.Context, Progress) error
 }
 
+// ExecutionState states whether the tool host knows that an attempted
+// invocation did not commit an external mutation.
+type ExecutionState string
+
+const (
+	ExecutionDefinitive ExecutionState = "definitive"
+	ExecutionUncertain  ExecutionState = "uncertain"
+)
+
+// RetryDisposition states whether policy may deliberately invoke the call
+// again. Permission to retry is still bounded by Definition.ReplaySafety.
+type RetryDisposition string
+
+const (
+	RetryNever   RetryDisposition = "never"
+	RetryAllowed RetryDisposition = "allowed"
+)
+
+// ExecutionError is a bounded correlated infrastructure failure. It is never
+// model-visible tool output. Unwrap preserves cancellation and deadline checks.
+type ExecutionError struct {
+	callID CallID
+	state  ExecutionState
+	retry  RetryDisposition
+	cause  error
+}
+
+// NewExecutionError constructs a validated infrastructure failure.
+func NewExecutionError(
+	callID CallID,
+	state ExecutionState,
+	retry RetryDisposition,
+	cause error,
+) (*ExecutionError, error) {
+	result := &ExecutionError{callID: callID, state: state, retry: retry, cause: cause}
+	if err := result.Validate(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// Error returns the bounded underlying failure text.
+func (failure *ExecutionError) Error() string {
+	if failure == nil || failure.cause == nil {
+		return "tool execution failure is unavailable"
+	}
+	return failure.cause.Error()
+}
+
+// Unwrap preserves errors.Is and errors.As for cancellation and typed causes.
+func (failure *ExecutionError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.cause
+}
+
+// CallID returns the invocation correlation identity.
+func (failure *ExecutionError) CallID() CallID {
+	if failure == nil {
+		return ""
+	}
+	return failure.callID
+}
+
+// State returns whether the execution outcome is definitive or uncertain.
+func (failure *ExecutionError) State() ExecutionState {
+	if failure == nil {
+		return ""
+	}
+	return failure.state
+}
+
+// RetryDisposition returns the validated retry advice.
+func (failure *ExecutionError) RetryDisposition() RetryDisposition {
+	if failure == nil {
+		return ""
+	}
+	return failure.retry
+}
+
+// Validate rejects uncorrelated, unbounded, or unsafe outcome combinations.
+func (failure *ExecutionError) Validate() error {
+	if failure == nil {
+		return errors.New("tool execution error is nil")
+	}
+	if err := validateIdentity("tool execution call ID", string(failure.callID)); err != nil {
+		return err
+	}
+	if failure.state != ExecutionDefinitive && failure.state != ExecutionUncertain {
+		return fmt.Errorf("tool execution state %q is unsupported", failure.state)
+	}
+	if failure.retry != RetryNever && failure.retry != RetryAllowed {
+		return fmt.Errorf("tool retry disposition %q is unsupported", failure.retry)
+	}
+	if failure.state == ExecutionUncertain && failure.retry != RetryNever {
+		return errors.New("uncertain execution outcomes must never permit automatic retry")
+	}
+	if failure.cause == nil {
+		return errors.New("tool execution error requires a cause")
+	}
+	message := failure.cause.Error()
+	if message == "" || message != strings.TrimSpace(message) {
+		return errors.New("tool execution error cause must be non-empty without surrounding whitespace")
+	}
+	if len(message) > MaximumExecutionErrorBytes {
+		return fmt.Errorf("tool execution error cause exceeds %d bytes", MaximumExecutionErrorBytes)
+	}
+	if _, nested := errors.AsType[*ExecutionError](failure.cause); nested {
+		return errors.New("tool execution errors must not be nested")
+	}
+	return nil
+}
+
 // Tool is one constructor-injected executable contribution. Implementations
 // are singleton beans by default and must be safe for concurrent Execute calls.
 // Context cancellation is cooperative; Spice cannot forcibly stop trusted
 // in-process code that ignores the context. Execute must not retain or invoke
-// Reporter after it returns.
+// Reporter after it returns. A model-visible tool problem is a Result with a
+// problem and a nil error. Infrastructure failure is a zero Result with exactly
+// one direct, correlated *ExecutionError; wrappers, joins, and returning both
+// result and error are invalid.
 type Tool interface {
 	Definition() Definition
-	Execute(context.Context, Call, Reporter) Result
+	Execute(context.Context, Call, Reporter) (Result, error)
+}
+
+func validEffect(effect Effect) bool {
+	return effect == EffectReadOnly || effect == EffectMutating
+}
+
+func validReplaySafety(replaySafety ReplaySafety) bool {
+	switch replaySafety {
+	case ReplaySafe, ReplayIdempotent, ReplayUnsafe:
+		return true
+	default:
+		return false
+	}
+}
+
+func mutationCapable(capability Capability) bool {
+	switch capability {
+	case CapabilityFilesystemWrite, CapabilityProcessExecute,
+		CapabilityNetworkAccess, CapabilityEnvironmentWrite:
+		return true
+	default:
+		return false
+	}
 }
 
 func validCapability(capability Capability) bool {

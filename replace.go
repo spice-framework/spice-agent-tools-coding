@@ -25,12 +25,14 @@ const (
 )
 
 type replaceTool struct {
-	config       Config
-	definition   tool.Definition
-	beforeCommit func()
-	syncParent   func(*os.Root, string) error
-	renameTarget func(*os.Root, string, string) error
-	commitLease  chan struct{}
+	config         Config
+	definition     tool.Definition
+	beforeCommit   func()
+	beforeRename   func()
+	afterPreflight func()
+	syncParent     func(*os.Root, string) error
+	renameTarget   func(*os.Root, string, string) error
+	commitLease    chan struct{}
 }
 
 type replaceArguments struct {
@@ -46,6 +48,7 @@ type replaceContent struct {
 	Bytes            int    `json:"bytes"`
 	SHA256           string `json:"sha256"`
 	Created          bool   `json:"created"`
+	Changed          bool   `json:"changed"`
 	Committed        bool   `json:"committed"`
 	Durable          bool   `json:"durable"`
 	TemporaryCleaned bool   `json:"temporary_cleaned"`
@@ -62,6 +65,8 @@ func NewReplace(config Config) (tool.Tool, error) {
 		"replace",
 		"Atomically create or stale-protected replace one bounded worktree file.",
 		json.RawMessage(replaceInputSchema),
+		tool.EffectMutating,
+		tool.ReplayIdempotent,
 		tool.CapabilityFilesystemRead,
 		tool.CapabilityFilesystemWrite,
 	)
@@ -76,37 +81,71 @@ func NewReplace(config Config) (tool.Tool, error) {
 
 func (replacer *replaceTool) Definition() tool.Definition { return replacer.definition.Clone() }
 
-func (replacer *replaceTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) tool.Result {
+func (replacer *replaceTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
 	if err := validateCall(call, replacer.definition.Name()); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
-	if err := contextFailure(ctx); err != nil {
-		return failureResult(call.ID(), err)
+	if result, err, stop := initialContextOutcome(ctx, call.ID(), tool.RetryAllowed); stop {
+		return result, err
 	}
 	var arguments replaceArguments
 	if err := decodeArguments(call.Arguments(), &arguments); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
 	if int64(len(arguments.Content)) > replacer.config.MaxWriteBytes {
-		return failureResult(call.ID(), invalidArguments("replacement content exceeds the configured write bound"))
+		return modelFailure(call.ID(), invalidArguments("replacement content exceeds the configured write bound"))
 	}
 	if err := validateReplaceMode(arguments); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
-	if err := reportProgress(ctx, reporter, call.ID(), "preparing atomic worktree update"); err != nil {
-		return failureResult(call.ID(), err)
+	if err := reportProgress(
+		ctx, reporter, call.ID(), "preparing atomic worktree update", tool.RetryAllowed,
+	); err != nil {
+		return tool.Result{}, err
+	}
+	if err := replacer.acquireCommitLease(ctx); err != nil {
+		return tool.Result{}, cancellationFailure(call.ID(), tool.RetryAllowed, err)
+	}
+	defer func() { <-replacer.commitLease }()
+	content, problem, err := replacer.replace(ctx, arguments)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return tool.Result{}, cancellationFailure(call.ID(), tool.RetryAllowed, err)
+		}
+		return modelFailure(call.ID(), err)
+	}
+	result, err := replaceResult(call.ID(), content, problem)
+	if err != nil {
+		state, retry := tool.ExecutionDefinitive, tool.RetryAllowed
+		if content.Committed {
+			state, retry = tool.ExecutionUncertain, tool.RetryNever
+		}
+		return tool.Result{}, infrastructureFailure(
+			call.ID(), state, retry, "replace result could not be encoded",
+		)
+	}
+	return result, nil
+}
+
+func (replacer *replaceTool) acquireCommitLease(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
 	}
 	select {
 	case replacer.commitLease <- struct{}{}:
-		defer func() { <-replacer.commitLease }()
 	case <-ctx.Done():
-		return failureResult(call.ID(), executionFailure("cancelled", "tool operation was cancelled"))
+		return ctx.Err()
 	}
-	content, problem, err := replacer.replace(ctx, arguments)
-	if err != nil {
-		return failureResult(call.ID(), err)
+	if err := ctx.Err(); err != nil {
+		<-replacer.commitLease
+		return err
 	}
-	return replaceResult(call.ID(), content, problem)
+	return nil
 }
 
 func validateReplaceMode(arguments replaceArguments) error {
@@ -141,9 +180,20 @@ func (replacer *replaceTool) replace(
 		return replaceContent{}, "", err
 	}
 	defer workspace.Close() //nolint:errcheck // Operation errors take precedence over close-only root release.
-	mode, err := replacer.preflight(workspace, path, arguments)
+	mode, unchanged, err := replacer.preflight(workspace, path, arguments)
 	if err != nil {
 		return replaceContent{}, "", err
+	}
+	replacer.runAfterPreflight()
+	if contextErr := contextFailure(ctx); contextErr != nil {
+		return replaceContent{}, "", contextErr
+	}
+	if unchanged {
+		digest := sha256.Sum256([]byte(arguments.Content))
+		return replaceContent{
+			OK: true, Path: path.display, Bytes: len(arguments.Content), SHA256: hex.EncodeToString(digest[:]),
+			Durable: true, TemporaryCleaned: true,
+		}, "", nil
 	}
 	temporary, err := writeTemporary(ctx, workspace, filepath.Dir(path.native), []byte(arguments.Content), mode)
 	if err != nil {
@@ -157,16 +207,8 @@ func (replacer *replaceTool) replace(
 	if contextErr := contextFailure(ctx); contextErr != nil {
 		return replaceContent{}, "", contextErr
 	}
-	if replacer.beforeCommit != nil {
-		replacer.beforeCommit()
-	}
-	if arguments.Create {
-		err = commitCreate(workspace, temporary, path.native)
-	} else {
-		err = replacer.commitReplace(ctx, workspace, temporary, path, arguments.ExpectedSHA256)
-	}
-	if err != nil {
-		return replaceContent{}, "", err
+	if commitErr := replacer.commitPrepared(ctx, workspace, temporary, path, arguments); commitErr != nil {
+		return replaceContent{}, "", commitErr
 	}
 	temporaryCleaned := true
 	if arguments.Create {
@@ -181,7 +223,7 @@ func (replacer *replaceTool) replace(
 	digest := sha256.Sum256([]byte(arguments.Content))
 	content := replaceContent{
 		OK: true, Path: path.display, Bytes: len(arguments.Content),
-		SHA256: hex.EncodeToString(digest[:]), Created: arguments.Create, Committed: true, Durable: true,
+		SHA256: hex.EncodeToString(digest[:]), Created: arguments.Create, Changed: true, Committed: true, Durable: true,
 		TemporaryCleaned: temporaryCleaned,
 	}
 	fileSyncErr := syncCommittedFile(workspace, path.native)
@@ -201,10 +243,35 @@ func (replacer *replaceTool) replace(
 	return content, "", nil
 }
 
-func replaceResult(callID tool.CallID, content replaceContent, problem string) tool.Result {
+func (replacer *replaceTool) runAfterPreflight() {
+	if replacer.afterPreflight != nil {
+		replacer.afterPreflight()
+	}
+}
+
+func (replacer *replaceTool) commitPrepared(
+	ctx context.Context,
+	workspace *os.Root,
+	temporary string,
+	path relativePath,
+	arguments replaceArguments,
+) error {
+	if replacer.beforeCommit != nil {
+		replacer.beforeCommit()
+	}
+	if arguments.Create {
+		if contextErr := contextFailure(ctx); contextErr != nil {
+			return contextErr
+		}
+		return commitCreate(workspace, temporary, path.native)
+	}
+	return replacer.commitReplace(ctx, workspace, temporary, path, arguments.ExpectedSHA256)
+}
+
+func replaceResult(callID tool.CallID, content replaceContent, problem string) (tool.Result, error) {
 	encoded, err := json.Marshal(content)
 	if err != nil {
-		return failureResult(callID, executionFailure("internal_contract", "replace result could not be encoded"))
+		return tool.Result{}, err
 	}
 	var result tool.Result
 	if problem == "" {
@@ -212,40 +279,43 @@ func replaceResult(callID tool.CallID, content replaceContent, problem string) t
 	} else {
 		result, err = tool.NewErrorResult(callID, encoded, problem)
 	}
-	if err != nil {
-		return failureResult(callID, executionFailure("internal_contract", "replace result could not be encoded"))
-	}
-	return result
+	return result, err
 }
 
-func (replacer *replaceTool) preflight(workspace *os.Root, path relativePath, arguments replaceArguments) (os.FileMode, error) {
+func (replacer *replaceTool) preflight(
+	workspace *os.Root,
+	path relativePath,
+	arguments replaceArguments,
+) (os.FileMode, bool, error) {
 	info, err := workspace.Lstat(path.native)
 	if arguments.Create {
 		if err == nil {
-			return 0, executionFailure("already_exists", "create target already exists")
+			return 0, false, executionFailure("already_exists", "create target already exists")
 		}
 		if !errors.Is(err, os.ErrNotExist) {
-			return 0, executionFailure("path_unavailable", "create target is unavailable or escapes the configured worktree")
+			return 0, false, executionFailure("path_unavailable", "create target is unavailable or escapes the configured worktree")
 		}
-		return 0o600, nil
+		return 0o600, false, nil
 	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return 0, executionFailure("not_found", "replace target does not exist")
+			return 0, false, executionFailure("not_found", "replace target does not exist")
 		}
-		return 0, executionFailure("path_unavailable", "replace target is unavailable or escapes the configured worktree")
+		return 0, false, executionFailure("path_unavailable", "replace target is unavailable or escapes the configured worktree")
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return 0, executionFailure("not_regular", "replace target must be a regular non-symbolic-link file")
+		return 0, false, executionFailure("not_regular", "replace target must be a regular non-symbolic-link file")
 	}
 	digest, err := boundedDigest(workspace, path.native, replacer.config.MaxWriteBytes)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if !bytes.Equal([]byte(digest), []byte(arguments.ExpectedSHA256)) {
-		return 0, executionFailure("stale", "replace target changed since it was read")
+		return 0, false, executionFailure("stale", "replace target changed since it was read")
 	}
-	return info.Mode().Perm(), nil
+	contentDigest := sha256.Sum256([]byte(arguments.Content))
+	unchanged := digest == hex.EncodeToString(contentDigest[:])
+	return info.Mode().Perm(), unchanged, nil
 }
 
 func (replacer *replaceTool) commitReplace(
@@ -256,8 +326,8 @@ func (replacer *replaceTool) commitReplace(
 	expected string,
 ) error {
 	for attempt := range maximumRenameAttempts {
-		if err := contextFailure(ctx); err != nil {
-			return err
+		if contextErr := contextFailure(ctx); contextErr != nil {
+			return contextErr
 		}
 		digest, err := boundedDigest(workspace, path.native, replacer.config.MaxWriteBytes)
 		if err != nil {
@@ -269,6 +339,12 @@ func (replacer *replaceTool) commitReplace(
 		info, err := workspace.Lstat(path.native)
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			return executionFailure("stale", "replace target changed before the atomic commit")
+		}
+		if replacer.beforeRename != nil {
+			replacer.beforeRename()
+		}
+		if contextErr := contextFailure(ctx); contextErr != nil {
+			return contextErr
 		}
 		err = replacer.renameTarget(workspace, temporary, path.native)
 		if err == nil {
@@ -289,7 +365,7 @@ func waitForRenameRetry(ctx context.Context) error {
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return executionFailure("cancelled", "tool operation was cancelled")
+		return ctx.Err()
 	case <-timer.C:
 		return nil
 	}

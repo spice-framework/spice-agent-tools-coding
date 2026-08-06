@@ -27,6 +27,11 @@ product source. `make fmt` is the only formatting target that mutates Go files.
 entry fails with an actionable prompt to run the explicit bootstrap.
 Product tests exercise traversal and symlink escape, paging and encoded payload
 bounds, create/replace/stale/race behavior, committed durability uncertainty,
-strict argv/workdir/environment policy, output truncation, cancellation,
-timeouts, descendant cleanup, fallback DI, and concurrency. Windows uses a real
-Job Object; Unix uses a real process group.
+acknowledgement-loss replay, commit-point cancellation, definition fingerprints,
+strict argv/workdir/environment policy, output truncation, caller cancellation
+and deadlines, configured timeouts, uncertain managed-process cleanup,
+dispatcher correlation, sanitized failure chains, fallback DI, and concurrency.
+Windows uses a real Job Object; Unix uses a real process group. A platform-
+specific detached-child fixture proves those mechanisms are cleanup aids rather
+than containment and prevents `managed_cleanup_completed` from being described
+as whole-tree termination.

@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require (
 	github.com/spice-framework/spice v0.1.0-preview.1.0.20260806200749-524424a04df0
-	github.com/spice-framework/spice-agent v0.0.0-20260806204214-1f072842707a
+	github.com/spice-framework/spice-agent v0.0.0-20260806225954-af79fc7fe4ad
 	golang.org/x/sys v0.47.0
 )
 

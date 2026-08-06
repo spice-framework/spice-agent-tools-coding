@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spice-framework/spice-agent/tool"
@@ -24,6 +25,7 @@ const (
 type shellTool struct {
 	config     Config
 	definition tool.Definition
+	run        func(context.Context, *exec.Cmd, time.Duration) processOutcome
 }
 
 type shellArguments struct {
@@ -32,18 +34,17 @@ type shellArguments struct {
 }
 
 type shellContent struct {
-	OK                   bool   `json:"ok"`
-	Workdir              string `json:"workdir"`
-	ExitCode             int    `json:"exit_code"`
-	Stdout               string `json:"stdout"`
-	Stderr               string `json:"stderr"`
-	Encoding             string `json:"encoding"`
-	StdoutBytes          int64  `json:"stdout_bytes"`
-	StderrBytes          int64  `json:"stderr_bytes"`
-	OutputTruncated      bool   `json:"output_truncated"`
-	Cancelled            bool   `json:"cancelled"`
-	TimedOut             bool   `json:"timed_out"`
-	TerminationConfirmed bool   `json:"termination_confirmed"`
+	OK                      bool   `json:"ok"`
+	Workdir                 string `json:"workdir"`
+	ExitCode                int    `json:"exit_code"`
+	Stdout                  string `json:"stdout"`
+	Stderr                  string `json:"stderr"`
+	Encoding                string `json:"encoding"`
+	StdoutBytes             int64  `json:"stdout_bytes"`
+	StderrBytes             int64  `json:"stderr_bytes"`
+	OutputTruncated         bool   `json:"output_truncated"`
+	TimedOut                bool   `json:"timed_out"`
+	ManagedCleanupCompleted bool   `json:"managed_cleanup_completed"`
 }
 
 // NewShell constructs the exact Spice Agent discrete-argv shell tool binding
@@ -57,6 +58,8 @@ func NewShell(config Config) (tool.Tool, error) {
 		"shell",
 		"Execute unsandboxed discrete argv from a worktree-selected directory with bounded output.",
 		json.RawMessage(shellInputSchema),
+		tool.EffectMutating,
+		tool.ReplayUnsafe,
 		tool.CapabilityFilesystemRead,
 		tool.CapabilityFilesystemWrite,
 		tool.CapabilityProcessExecute,
@@ -68,24 +71,24 @@ func NewShell(config Config) (tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &shellTool{config: normalized, definition: definition}, nil
+	return &shellTool{config: normalized, definition: definition, run: runProcess}, nil
 }
 
 func (shell *shellTool) Definition() tool.Definition { return shell.definition.Clone() }
 
-func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) tool.Result {
+func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
 	if err := validateCall(call, shell.definition.Name()); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
-	if err := contextFailure(ctx); err != nil {
-		return failureResult(call.ID(), err)
+	if result, err, stop := initialContextOutcome(ctx, call.ID(), tool.RetryNever); stop {
+		return result, err
 	}
 	var arguments shellArguments
 	if err := decodeArguments(call.Arguments(), &arguments); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
 	if err := validateArgv(arguments.Argv); err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
 	workdir := arguments.Workdir
 	if workdir == "" {
@@ -93,16 +96,37 @@ func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter to
 	}
 	path, err := parseRelativePath(workdir, true)
 	if err != nil {
-		return failureResult(call.ID(), err)
+		return modelFailure(call.ID(), err)
 	}
-	if progressErr := reportProgress(ctx, reporter, call.ID(), "starting bounded child process"); progressErr != nil {
-		return failureResult(call.ID(), progressErr)
+	if progressErr := reportProgress(
+		ctx, reporter, call.ID(), "starting bounded child process", tool.RetryNever,
+	); progressErr != nil {
+		return tool.Result{}, progressErr
 	}
 	content, problem, err := shell.execute(ctx, arguments.Argv, path)
 	if err != nil {
-		return failureResult(call.ID(), err)
+		if uncertain, present := errors.AsType[executionUncertainty](err); present {
+			if uncertain.preserveContext {
+				return tool.Result{}, contextInfrastructureFailure(
+					call.ID(), uncertain.state, tool.RetryNever,
+					uncertain.message, uncertain.cause,
+				)
+			}
+			return tool.Result{}, infrastructureFailure(
+				call.ID(), tool.ExecutionUncertain, tool.RetryNever,
+				uncertain.message,
+			)
+		}
+		return modelFailure(call.ID(), err)
 	}
-	return encodeShellResult(call.ID(), content, problem)
+	result, err := encodeShellResult(call.ID(), content, problem)
+	if err != nil {
+		return tool.Result{}, infrastructureFailure(
+			call.ID(), tool.ExecutionUncertain, tool.RetryNever,
+			"command result could not be encoded",
+		)
+	}
+	return result, nil
 }
 
 func (shell *shellTool) execute(ctx context.Context, argv []string, workdir relativePath) (shellContent, string, error) {
@@ -112,7 +136,7 @@ func (shell *shellTool) execute(ctx context.Context, argv []string, workdir rela
 	}
 	defer closeBestEffort(workspace)
 	defer closeBestEffort(directory)
-	outcome := runProcess(ctx, command, shell.config.CommandTimeout)
+	outcome := shell.run(ctx, command, shell.config.CommandTimeout)
 	content := capturedShellContent(workdir, stdout, stderr, outcome)
 	problem, err := classifyProcessOutcome(outcome)
 	if err != nil {
@@ -169,12 +193,12 @@ func capturedShellContent(
 	stdoutContent, stdoutBytes, truncated := stdout.snapshot()
 	stderrContent, stderrBytes, stderrTruncated := stderr.snapshot()
 	content := shellContent{
-		OK:      outcome.waitErr == nil && !outcome.cancelled && !outcome.timedOut && outcome.stopErr == nil,
+		OK:      outcome.waitErr == nil && outcome.contextErr == nil && !outcome.timedOut && outcome.stopErr == nil,
 		Workdir: workdir.display, ExitCode: exitCode(outcome.waitErr),
 		Stdout: string(stdoutContent), Stderr: string(stderrContent), Encoding: "utf-8",
 		StdoutBytes: stdoutBytes, StderrBytes: stderrBytes,
-		OutputTruncated: truncated || stderrTruncated, Cancelled: outcome.cancelled, TimedOut: outcome.timedOut,
-		TerminationConfirmed: outcome.stopErr == nil,
+		OutputTruncated: truncated || stderrTruncated, TimedOut: outcome.timedOut,
+		ManagedCleanupCompleted: outcome.stopErr == nil,
 	}
 	if !utf8.Valid(stdoutContent) || !utf8.Valid(stderrContent) {
 		content.Encoding = "base64"
@@ -185,21 +209,36 @@ func capturedShellContent(
 }
 
 func classifyProcessOutcome(outcome processOutcome) (string, error) {
-	terminationConfirmed := outcome.stopErr == nil
+	managedCleanupCompleted := outcome.stopErr == nil
+	if outcome.contextErr != nil {
+		message := "command execution was cancelled"
+		if errors.Is(outcome.contextErr, context.DeadlineExceeded) {
+			message = "command execution exceeded the caller deadline"
+		}
+		if !managedCleanupCompleted {
+			message += " and managed launcher cleanup did not complete"
+		}
+		return "", executionUncertainty{
+			message: message, cause: outcome.contextErr, preserveContext: true, state: shellInterruptionState(outcome),
+		}
+	}
 	if outcome.timedOut {
-		if !terminationConfirmed {
-			return "command timed out and process-tree termination could not be confirmed", nil
+		if !managedCleanupCompleted {
+			return "", executionUncertainty{
+				message: "command timed out and managed launcher cleanup did not complete",
+				cause:   outcome.stopErr,
+			}
 		}
 		return "command exceeded the configured timeout", nil
 	}
-	if outcome.cancelled {
-		if !terminationConfirmed {
-			return "command was cancelled and process-tree termination could not be confirmed", nil
+	if !managedCleanupCompleted {
+		if outcome.started {
+			return "", executionUncertainty{
+				message: "command managed launcher cleanup did not complete",
+				cause:   outcome.stopErr,
+			}
 		}
-		return "command was cancelled", nil
-	}
-	if !terminationConfirmed {
-		return "command completed but process-tree cleanup could not be confirmed", nil
+		return "command could not be started and launcher cleanup failed", nil
 	}
 	if outcome.waitErr != nil {
 		if exitError, ok := errors.AsType[*exec.ExitError](outcome.waitErr); ok {
@@ -208,6 +247,24 @@ func classifyProcessOutcome(outcome processOutcome) (string, error) {
 		return "", executionFailure("start_failed", "command could not be started or observed")
 	}
 	return "", nil
+}
+
+type executionUncertainty struct {
+	message         string
+	cause           error
+	preserveContext bool
+	state           tool.ExecutionState
+}
+
+func (uncertainty executionUncertainty) Error() string { return uncertainty.message }
+
+func (uncertainty executionUncertainty) Unwrap() error { return uncertainty.cause }
+
+func shellInterruptionState(outcome processOutcome) tool.ExecutionState {
+	if outcome.started {
+		return tool.ExecutionUncertain
+	}
+	return tool.ExecutionDefinitive
 }
 
 func validateArgv(argv []string) error {
@@ -248,20 +305,20 @@ func exitCode(err error) int {
 	return -1
 }
 
-func encodeShellResult(callID tool.CallID, content shellContent, problem string) tool.Result {
+func encodeShellResult(callID tool.CallID, content shellContent, problem string) (tool.Result, error) {
 	result, err := newShellResult(callID, content, problem)
 	if err == nil {
-		return result
+		return result, nil
 	}
 	if content.Encoding == "utf-8" {
 		content.Encoding = "base64"
 		content.Stdout = base64.StdEncoding.EncodeToString([]byte(content.Stdout))
 		content.Stderr = base64.StdEncoding.EncodeToString([]byte(content.Stderr))
 		if result, err = newShellResult(callID, content, problem); err == nil {
-			return result
+			return result, nil
 		}
 	}
-	return failureResult(callID, executionFailure("result_too_large", "command result exceeds the supported payload limit"))
+	return tool.Result{}, err
 }
 
 func newShellResult(callID tool.CallID, content shellContent, problem string) (tool.Result, error) {

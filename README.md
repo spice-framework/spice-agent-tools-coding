@@ -32,18 +32,35 @@ The explicit `/autoconfigure` package contributes those same three factories as
 fallback beans through generated Spice DI; there is no global registry.
 
 - `read` uses relative paths and offset/limit paging. A complete page includes
-  a SHA-256 suitable for a later bounded replace.
+  a SHA-256 suitable for a later bounded replace. It declares `read_only` and
+  `safe` replay.
 - `replace` requires either `create=true` for no-overwrite creation or the exact
   lowercase `expected_sha256` for replacement. Results distinguish committed
-  state from confirmed durability.
+  state from confirmed durability. It declares `mutating` and `idempotent`:
+  replay after a lost acknowledgement cannot repeat the file effect because
+  create observes the existing target and replace observes the consumed digest.
+  A replacement whose content already has the expected digest is an explicit
+  successful no-op (`changed=false`, `committed=false`).
 - `shell` accepts discrete argv and an optional relative workdir. It never
   invokes a shell, inherits only application-allowlisted environment names, and
   reports captured/observed byte counts plus deterministic truncation metadata.
+  It declares `mutating` and `unsafe` replay because an arbitrary process may
+  have committed effects before its outcome becomes unavailable.
+
+Argument, path, operating-system, timeout, exit, stale-write, and durability
+problems are bounded model-visible `tool.Result` values. Cancellation and host
+progress/result-delivery failures return a zero result with one direct,
+correlated `*tool.ExecutionError`; cancellation and deadline identity remains
+available through `errors.Is`. Callers must inspect both return values and must
+not infer replay safety from capabilities alone.
 
 > **Security warning:** these tools can read and write files, execute processes,
 > and use network or environment access with the operating-system user's
 > privileges. They provide no sandbox or approval prompt. The shell child's
-> authority is not confined to the configured worktree.
+> authority is not confined to the configured worktree. Process groups and Job
+> Objects provide bounded managed cleanup, but deliberately detached descendants
+> may outlive the launcher; `managed_cleanup_completed` is not a containment
+> guarantee.
 
 Read and replace paths use `os.Root`. Shell workdirs reject symbolic-link
 components and are revalidated before start, but same-user concurrent path

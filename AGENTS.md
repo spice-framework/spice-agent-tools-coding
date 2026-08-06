@@ -6,7 +6,8 @@ commits. Fetch before editing and immediately before pushing; never overwrite
 unexpected remote work.
 
 Go 1.26.5 is mandatory. Keep the product standard-library-first. Preserve
-caller cancellation, process-tree termination, path-boundary enforcement,
+caller cancellation, bounded managed-launcher cleanup with an honest detached-
+descendant boundary, path-boundary enforcement,
 bounded input/output, atomic writes, explicit capabilities, prominent bare-
 privilege warnings, instance ownership, and explicit `/autoconfigure`
 activation. Product packages must not import Spice compiler, command, or

@@ -21,12 +21,20 @@ portable filesystem contract has no conditional compare-and-swap primitive.
 
 Shell uses discrete argv, rejects symbolic-link workdir components, revalidates
 them immediately before start, and inherits only configured environment names.
-Unix process groups and Windows kill-on-close Job Objects terminate descendants;
-post-force waiting is bounded and any unconfirmed cleanup is visible in the
-terminal result. Output is bounded and truncation is explicit.
+Unix process groups and Windows kill-on-close Job Objects attempt bounded
+cleanup of the managed launcher and ordinary descendants. They are not a
+sandbox: Unix children may deliberately detach with `setsid`/`setpgid`, and a
+Windows child created before the launcher is attached to its Job Object is not
+captured by that job. `managed_cleanup_completed` confirms only that the
+requested launcher cleanup and wait completed without error. Incomplete managed
+cleanup after start returns a direct uncertain, never-replayable execution
+failure rather than model-visible output. Output is bounded and truncation is
+explicit.
 
-File contents, command arguments, inherited environment values, and process
-output must not enter general diagnostics. Tool call/result events may contain
+File contents, command arguments, inherited environment values, process output,
+and raw reporter/operating-system failure chains must not enter general
+diagnostics. Only canonical caller cancellation/deadline identity is preserved
+through `errors.Is`. Tool call/result events may contain
 the model-requested arguments and bounded result by design, so callers must not
 place secrets in argv or file content.
 

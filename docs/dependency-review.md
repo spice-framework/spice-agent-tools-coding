@@ -5,7 +5,10 @@
 The coding-tools product remains standard-library-first. Spice core is pinned
 at `v0.1.0-preview.1.0.20260806200749-524424a04df0`, and the toolchain is pinned
 at `v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6`. Spice Agent is pinned at
-`v0.0.0-20260806204214-1f072842707a` for its public immutable tool contract.
+`v0.0.0-20260806225954-af79fc7fe4ad` for its public immutable tool contract,
+including explicit effect, replay-safety, fingerprint, and execution-failure
+semantics.
+
 `golang.org/x/sys/windows` v0.47.0 is the sole non-framework
 runtime package and is compiled only on Windows for Job Object ownership and
 typed status classification around root-contained atomic replacement.
@@ -29,6 +32,10 @@ Windows dependency.
   payload bound.
 - Capability metadata discloses read, write, and process risk but is not
   represented as a sandbox or permission boundary.
+- Effect and replay metadata is explicit and fingerprinted. Read is
+  read-only/safe; replace is mutating/idempotent because repeated create and
+  stale-protected replace calls cannot duplicate a committed file mutation;
+  shell is mutating/unsafe.
 - `os.Root` rejects traversal and link escape for read/replace operations.
   Shell rejects and revalidates link components before its path-based process
   start. Same-user concurrent mutation remains explicitly trusted.
@@ -39,14 +46,20 @@ Windows dependency.
   every attempt repeats the digest and regular non-symbolic-link checks. A real
   ACL denial exhausts to `replace_failed`; retryability does not assert that an
   error was transient.
-- Windows Job Objects and Unix process groups own child trees; forced-wait
-  completion is bounded and unconfirmed termination is returned explicitly.
+- Windows Job Objects and Unix process groups provide bounded cleanup for the
+  managed launcher and ordinary descendants. Deliberately detached Unix
+  processes and Windows children created before Job Object attachment may
+  escape; these primitives are not a sandbox. Incomplete launcher cleanup is
+  returned explicitly as an uncertain, never-replayable failure.
 
 ## Observability
 
-Results contain byte counts, exit classification, truncation,
-cancellation/timeout, termination confirmation, and replace commit/durability
-state. File contents, command output, environment values, and arguments are
+Results contain byte counts, exit classification, truncation, timeout, managed-
+cleanup completion, and replace commit/durability state. Validation and
+operating-system failures remain model-visible results. Cancellation and host
+delivery failures use bounded, correlated execution errors that preserve
+`context.Canceled` or `context.DeadlineExceeded`. File contents, command output,
+environment values, arguments, and raw operating-system diagnostics are
 excluded from general diagnostics.
 
 ## Build-only dependencies
