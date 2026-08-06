@@ -1,11 +1,151 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestNetworkAllowedOnlyForBootstrap(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"fast", "check", "fmt", "verify", "unknown"} {
+		if networkAllowed(mode) {
+			t.Fatalf("networkAllowed(%q) = true", mode)
+		}
+	}
+	if !networkAllowed("tools-bootstrap") {
+		t.Fatal("networkAllowed(tools-bootstrap) = false")
+	}
+}
+
+func TestBootstrapDownloadArguments(t *testing.T) {
+	t.Parallel()
+	moduleFile := filepath.Join("private", "graph.mod")
+	want := "mod download -modfile=" + moduleFile + " all"
+	if got := strings.Join(bootstrapDownloadArguments(moduleFile), " "); got != want {
+		t.Fatalf("bootstrapDownloadArguments() = %q, want %q", got, want)
+	}
+}
+
+func TestBootstrapPreservesRepositoryOnSuccessAndFailure(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name      string
+		runnerErr error
+	}{
+		{name: "success"},
+		{name: "failure", runnerErr: errors.New("download failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := bootstrapFixture(t, true)
+			before, err := sourceTreeDigests(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls [][]string
+			runner := func(_ context.Context, directory string, arguments ...string) error {
+				if directory != root && directory != filepath.Join(root, "tools") {
+					t.Fatalf("unexpected directory %q", directory)
+				}
+				calls = append(calls, append([]string(nil), arguments...))
+				return test.runnerErr
+			}
+			err = bootstrapDependencies(context.Background(), root, runner)
+			if !errors.Is(err, test.runnerErr) {
+				t.Fatalf("bootstrapDependencies() error = %v, want %v", err, test.runnerErr)
+			}
+			after, digestErr := sourceTreeDigests(root)
+			if digestErr != nil {
+				t.Fatal(digestErr)
+			}
+			if len(before) != len(after) {
+				t.Fatalf("repository file count changed: %d != %d", len(before), len(after))
+			}
+			for name, digest := range before {
+				if after[name] != digest {
+					t.Fatalf("repository file %q changed", name)
+				}
+			}
+			wantCalls := 2
+			if test.runnerErr != nil {
+				wantCalls = 1
+			}
+			if len(calls) != wantCalls {
+				t.Fatalf("bootstrap calls = %d, want %d", len(calls), wantCalls)
+			}
+			for _, arguments := range calls {
+				if len(arguments) != 4 || arguments[0] != "mod" || arguments[1] != "download" ||
+					!strings.HasPrefix(arguments[2], "-modfile=") || arguments[3] != "all" {
+					t.Fatalf("unexpected bootstrap arguments: %q", arguments)
+				}
+				if strings.HasPrefix(strings.TrimPrefix(arguments[2], "-modfile="), root) {
+					t.Fatalf("temporary modfile is inside repository: %q", arguments[2])
+				}
+			}
+		})
+	}
+}
+
+func TestBootstrapAllowsMissingToolsModule(t *testing.T) {
+	t.Parallel()
+	root := bootstrapFixture(t, false)
+	calls := 0
+	err := bootstrapDependencies(context.Background(), root, func(_ context.Context, _ string, _ ...string) error {
+		calls++
+		return nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("bootstrapDependencies() = calls %d, error %v", calls, err)
+	}
+}
+
+func TestCommandEnvironmentSeparatesNetworkAndSecrets(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "must-not-leak")
+	t.Setenv("SPICE_TEST_TOKEN", "must-not-leak")
+	for _, test := range []struct {
+		name    string
+		network bool
+		proxy   string
+	}{
+		{name: "offline", proxy: "off"},
+		{name: "bootstrap", network: true, proxy: "https://proxy.golang.org"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			environment := strings.Join(commandEnvironment(test.network, nil), "\n")
+			if strings.Contains(environment, "must-not-leak") || !strings.Contains(environment, "GOPROXY="+test.proxy) {
+				t.Fatalf("unsafe command environment:\n%s", environment)
+			}
+			if test.network && !strings.Contains(environment, "GOAUTH=off") {
+				t.Fatalf("bootstrap environment enables Go authentication:\n%s", environment)
+			}
+		})
+	}
+}
+
+func bootstrapFixture(t *testing.T, tools bool) string {
+	t.Helper()
+	root := t.TempDir()
+	modules := []string{root}
+	if tools {
+		modules = append(modules, filepath.Join(root, "tools"))
+	}
+	for _, directory := range modules {
+		if err := os.MkdirAll(directory, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "go.mod"), []byte("module example.com/fixture\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "go.sum"), []byte("fixture sum\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
 
 func TestTotalCoverage(t *testing.T) {
 	t.Parallel()

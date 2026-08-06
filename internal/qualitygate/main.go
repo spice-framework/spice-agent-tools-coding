@@ -34,7 +34,7 @@ func main() {
 }
 
 func execute() int {
-	mode := flag.String("mode", "check", "fast, check, fmt, or verify")
+	mode := flag.String("mode", "check", "tools-bootstrap, fast, check, fmt, or verify")
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
@@ -52,6 +52,9 @@ func execute() int {
 func run(ctx context.Context, root, mode string) error {
 	if runtime.Version() != requiredGo {
 		return fmt.Errorf("requires %s, got %s", requiredGo, runtime.Version())
+	}
+	if networkAllowed(mode) {
+		return bootstrapDependencies(ctx, root, networkCommand)
 	}
 	switch mode {
 	case "fast":
@@ -75,6 +78,80 @@ func run(ctx context.Context, root, mode string) error {
 	default:
 		return fmt.Errorf("unsupported mode %q", mode)
 	}
+}
+
+func networkAllowed(mode string) bool { return mode == "tools-bootstrap" }
+
+type bootstrapRunner func(context.Context, string, ...string) error
+
+type moduleGraph struct {
+	directory string
+	optional  bool
+}
+
+func bootstrapDependencies(ctx context.Context, root string, runner bootstrapRunner) (returnErr error) {
+	before, err := sourceTreeDigests(root)
+	if err != nil {
+		return fmt.Errorf("snapshot repository before bootstrap: %w", err)
+	}
+	defer func() {
+		after, snapshotErr := sourceTreeDigests(root)
+		if snapshotErr != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("snapshot repository after bootstrap: %w", snapshotErr))
+			return
+		}
+		if !maps.Equal(before, after) {
+			returnErr = errors.Join(returnErr, errors.New("dependency bootstrap modified the repository"))
+		}
+	}()
+
+	graphs := []moduleGraph{{directory: root}, {directory: filepath.Join(root, "tools"), optional: true}}
+	for _, graph := range graphs {
+		if err := bootstrapModuleGraph(ctx, graph, runner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bootstrapModuleGraph(ctx context.Context, graph moduleGraph, runner bootstrapRunner) (returnErr error) {
+	moduleFile := filepath.Join(graph.directory, "go.mod")
+	moduleContent, err := os.ReadFile(moduleFile) // #nosec G304 -- repository-owned module graph.
+	if errors.Is(err, os.ErrNotExist) && graph.optional {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read %s: %w", moduleFile, err)
+	}
+	temporary, err := os.MkdirTemp("", "spice-tools-bootstrap-*")
+	if err != nil {
+		return fmt.Errorf("create dependency bootstrap directory: %w", err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, os.RemoveAll(temporary)) }()
+	temporaryRoot, err := os.OpenRoot(temporary)
+	if err != nil {
+		return fmt.Errorf("open dependency bootstrap directory: %w", err)
+	}
+	defer func() { returnErr = errors.Join(returnErr, temporaryRoot.Close()) }()
+
+	temporaryModule := filepath.Join(temporary, "graph.mod")
+	if writeErr := temporaryRoot.WriteFile("graph.mod", moduleContent, 0o600); writeErr != nil {
+		return fmt.Errorf("write temporary module file: %w", writeErr)
+	}
+	sumFile := filepath.Join(graph.directory, "go.sum")
+	sumContent, err := os.ReadFile(sumFile) // #nosec G304 -- repository-owned module graph.
+	if err == nil {
+		if writeErr := temporaryRoot.WriteFile("graph.sum", sumContent, 0o600); writeErr != nil {
+			return fmt.Errorf("write temporary checksum file: %w", writeErr)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", sumFile, err)
+	}
+	return runner(ctx, graph.directory, bootstrapDownloadArguments(temporaryModule)...)
+}
+
+func bootstrapDownloadArguments(moduleFile string) []string {
+	return []string{"mod", "download", "-modfile=" + moduleFile, "all"}
 }
 
 func check(ctx context.Context, root string) error {
@@ -319,6 +396,14 @@ func goFiles(root string) ([]string, error) {
 }
 
 func treeDigests(root string) (_ map[string][sha256.Size]byte, returnErr error) {
+	return digests(root, false)
+}
+
+func sourceTreeDigests(root string) (_ map[string][sha256.Size]byte, returnErr error) {
+	return digests(root, true)
+}
+
+func digests(root string, excludeGit bool) (_ map[string][sha256.Size]byte, returnErr error) {
 	opened, err := os.OpenRoot(root)
 	if err != nil {
 		return nil, fmt.Errorf("open tree %q: %w", root, err)
@@ -330,6 +415,9 @@ func treeDigests(root string) (_ map[string][sha256.Size]byte, returnErr error) 
 			return walkErr
 		}
 		if entry.IsDir() {
+			if excludeGit && path == ".git" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		content, readErr := opened.ReadFile(path)
@@ -385,6 +473,19 @@ func command(ctx context.Context, directory string, environment map[string]strin
 	return nil
 }
 
+func networkCommand(ctx context.Context, directory string, arguments ...string) error {
+	// #nosec G204,G702 -- only the exact copied module graphs are downloaded.
+	cmd := exec.CommandContext(ctx, "go", arguments...)
+	cmd.Dir = directory
+	cmd.Env = commandEnvironment(true, nil)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("go %s: %w", strings.Join(arguments, " "), err)
+	}
+	return nil
+}
+
 func capture(ctx context.Context, directory, executable string, arguments ...string) (string, error) {
 	// #nosec G204,G702 -- executable and arguments are repository-owned gate values.
 	cmd := exec.CommandContext(ctx, executable, arguments...)
@@ -401,13 +502,31 @@ func capture(ctx context.Context, directory, executable string, arguments ...str
 }
 
 func mergedEnvironment(overrides map[string]string) []string {
-	values := map[string]string{"GOWORK": "off", "GOPROXY": "off", "GOFLAGS": "", "GOTOOLCHAIN": "local"}
+	return commandEnvironment(false, overrides)
+}
+
+func commandEnvironment(network bool, overrides map[string]string) []string {
+	values := map[string]string{"GOWORK": "off", "GOFLAGS": "", "GOTOOLCHAIN": "local"}
+	if network {
+		values["GOAUTH"] = "off"
+		values["GONOPROXY"] = ""
+		values["GONOSUMDB"] = ""
+		values["GOPRIVATE"] = ""
+		values["GOPROXY"] = "https://proxy.golang.org"
+		values["GOSUMDB"] = "sum.golang.org"
+	} else {
+		values["GOPROXY"] = "off"
+	}
 	maps.Copy(values, overrides)
 	result := make([]string, 0, len(os.Environ())+len(values))
 	for _, entry := range os.Environ() {
 		key, _, found := strings.Cut(entry, "=")
 		if found {
-			if _, replaced := values[strings.ToUpper(key)]; !replaced {
+			upperKey := strings.ToUpper(key)
+			if sensitiveEnvironmentKey(upperKey) {
+				continue
+			}
+			if _, replaced := values[upperKey]; !replaced {
 				result = append(result, entry)
 			}
 		}
@@ -417,4 +536,10 @@ func mergedEnvironment(overrides map[string]string) []string {
 	}
 	slices.Sort(result)
 	return result
+}
+
+func sensitiveEnvironmentKey(key string) bool {
+	return strings.Contains(key, "TOKEN") || strings.Contains(key, "PASSWORD") ||
+		strings.Contains(key, "SECRET") || strings.HasSuffix(key, "API_KEY") ||
+		strings.HasSuffix(key, "ACCESS_KEY") || strings.HasSuffix(key, "PRIVATE_KEY")
 }

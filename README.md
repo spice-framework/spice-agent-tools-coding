@@ -53,3 +53,7 @@ process racing the final commit.
 
 See [the dependency review](docs/dependency-review.md),
 [security review](docs/security-review.md), and [support matrix](docs/support.md).
+
+On a fresh clone, run `make tools-bootstrap` once to populate the exact product
+and tools module graphs without changing tracked module files. All ordinary
+quality targets remain offline; run the complete suite with `make verify`.
