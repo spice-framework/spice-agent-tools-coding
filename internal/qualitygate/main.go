@@ -26,7 +26,7 @@ const (
 	modulePath      = "github.com/spice-framework/spice-agent-tools-coding"
 	requiredGo      = "go1.26.5"
 	minimumCoverage = 85.0
-	agentVersion    = "v0.0.0-20260806183953-eaf19180429a"
+	agentVersion    = "v0.0.0-20260806191411-841edd3d47ad"
 )
 
 func main() {

@@ -2,7 +2,7 @@
   "schema": 1,
   "minimum": "v0.1.0-preview.1",
   "current": "v0.1.0-preview.1",
-  "spice_agent": "v0.0.0-20260806183953-eaf19180429a",
+  "spice_agent": "v0.0.0-20260806191411-841edd3d47ad",
   "toolchain": "v0.1.0-preview.1",
   "go": "1.26.5"
 }

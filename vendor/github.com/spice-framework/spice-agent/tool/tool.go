@@ -3,9 +3,12 @@ package tool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -94,6 +97,33 @@ func (definition Definition) InputSchema() json.RawMessage { return cloneJSON(de
 // Capabilities returns an ordered defensive copy.
 func (definition Definition) Capabilities() []Capability {
 	return append([]Capability(nil), definition.capabilities...)
+}
+
+// Fingerprint returns a deterministic hexadecimal SHA-256 identity for the
+// complete model-visible and security-relevant contract. Capability order is
+// normalized because it does not change the contract's meaning.
+func (definition Definition) Fingerprint() string {
+	hash := sha256.New()
+	writeFingerprintField(hash, []byte(definition.name))
+	writeFingerprintField(hash, []byte(definition.description))
+	writeFingerprintField(hash, definition.inputSchema)
+	capabilities := append([]Capability(nil), definition.capabilities...)
+	slices.Sort(capabilities)
+	for _, capability := range capabilities {
+		writeFingerprintField(hash, []byte(capability))
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+type fingerprintWriter interface {
+	Write([]byte) (int, error)
+}
+
+func writeFingerprintField(destination fingerprintWriter, value []byte) {
+	var size [8]byte
+	binary.BigEndian.PutUint64(size[:], uint64(len(value)))
+	_, _ = destination.Write(size[:]) // hash.Hash writes cannot fail.
+	_, _ = destination.Write(value)   // hash.Hash writes cannot fail.
 }
 
 // SizeBytes returns deterministic request-budget accounting.

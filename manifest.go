@@ -33,7 +33,7 @@ func Manifest() spicestarter.Manifest {
 		Dependencies: []spicestarter.Dependency{
 			{
 				Module:  "github.com/spice-framework/spice-agent",
-				Version: "v0.0.0-20260806183953-eaf19180429a",
+				Version: "v0.0.0-20260806191411-841edd3d47ad",
 				License: "Apache-2.0",
 			},
 			{
