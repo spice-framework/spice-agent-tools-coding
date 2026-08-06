@@ -2,10 +2,11 @@
 
 ## Decision
 
-The coding-tools product remains standard-library-first. Spice core and
-toolchain remain the framework/build dependencies at `v0.1.0-preview.1`. Spice
-Agent is pinned at `v0.0.0-20260806191411-841edd3d47ad` for its public immutable
-tool contract. `golang.org/x/sys/windows` v0.47.0 is the sole non-framework
+The coding-tools product remains standard-library-first. Spice core is pinned
+at `v0.1.0-preview.1.0.20260806200749-524424a04df0`, and the toolchain is pinned
+at `v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6`. Spice Agent is pinned at
+`v0.0.0-20260806204214-1f072842707a` for its public immutable tool contract.
+`golang.org/x/sys/windows` v0.47.0 is the sole non-framework
 runtime package and is compiled only on Windows for Job Object ownership and
 typed status classification around root-contained atomic replacement.
 

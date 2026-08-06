@@ -243,13 +243,18 @@ func TestTreeDigests(t *testing.T) {
 func TestCheckContracts(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	writeGateFile(t, root, "go.mod", "require github.com/spice-framework/spice-agent "+agentVersion+"\n")
+	module := "require (\n" +
+		"github.com/spice-framework/spice " + coreVersion + "\n" +
+		"github.com/spice-framework/spice-agent " + agentVersion + "\n" +
+		"github.com/spice-framework/toolchain " + toolchainVersion + "\n" +
+		")\ntool github.com/spice-framework/toolchain/cmd/spice\n"
+	writeGateFile(t, root, "go.mod", module)
 	writeGateFile(t, root, "tools/go.mod", "require google.golang.org/grpc v1.82.1 // indirect\n")
-	writeGateFile(t, root, "spice-compatibility.json", `{"schema":1,"minimum":"v0.1.0-preview.1","current":"v0.1.0-preview.1","spice_agent":"`+agentVersion+`","toolchain":"v0.1.0-preview.1","go":"1.26.5"}`)
+	writeGateFile(t, root, "spice-compatibility.json", `{"schema":1,"minimum":"`+coreVersion+`","current":"`+coreVersion+`","spice_agent":"`+agentVersion+`","toolchain":"`+toolchainVersion+`","go":"1.26.5"}`)
 	if err := checkContracts(root); err != nil {
 		t.Fatal(err)
 	}
-	writeGateFile(t, root, "go.mod", "require github.com/spice-framework/spice-agent "+agentVersion+"\nreplace github.com/spice-framework/spice-agent => ../spice-agent\n")
+	writeGateFile(t, root, "go.mod", module+"replace github.com/spice-framework/spice-agent => ../spice-agent\n")
 	if err := checkContracts(root); err == nil || !strings.Contains(err.Error(), "without a replace") {
 		t.Fatalf("checkContracts() error = %v", err)
 	}

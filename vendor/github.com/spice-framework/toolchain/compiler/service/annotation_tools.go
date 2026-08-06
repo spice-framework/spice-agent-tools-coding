@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/token"
+	"go/types"
 	"sort"
 	"strings"
 
@@ -202,6 +203,17 @@ func toolAnalyzeParams(
 	if symbol.Receiver != "" {
 		facts["receiver"] = symbol.Receiver
 	}
+	resultFacts, err := toolFunctionResultFacts(symbol.Signature)
+	if err != nil {
+		return protocol.AnalyzeParams{}, fmt.Errorf(
+			"describe function results for %s: %w",
+			occurrence.SymbolID,
+			err,
+		)
+	}
+	for key, value := range resultFacts {
+		facts[key] = value
+	}
 	return protocol.AnalyzeParams{
 		Descriptor: sdk.Symbol{
 			Package: item.Package,
@@ -225,6 +237,81 @@ func toolAnalyzeParams(
 			Facts: facts,
 		},
 	}, nil
+}
+
+// toolFunctionResultFacts transports generic, non-executable go/types facts
+// through v1alpha2's existing extensible invocation map. A nil signature is a
+// non-function declaration and deliberately has no result-fact namespace.
+func toolFunctionResultFacts(
+	signature *types.Signature,
+) (map[string]string, error) {
+	if signature == nil {
+		return map[string]string{}, nil
+	}
+	results := signature.Results()
+	facts := make([]sdk.FunctionResultFact, results.Len())
+	for index := range results.Len() {
+		original := results.At(index).Type()
+		canonical := types.Unalias(original)
+		effective := canonical
+		originPackage := ""
+		originName := ""
+		if named, ok := canonical.(*types.Named); ok {
+			if object := named.Origin().Obj(); object != nil {
+				originName = object.Name()
+				if object.Pkg() != nil {
+					originPackage = object.Pkg().Path()
+				}
+			}
+			effective = named.Underlying()
+		}
+		kind, err := toolGoTypeKind(effective)
+		if err != nil {
+			return nil, fmt.Errorf("result %d: %w", index, err)
+		}
+		facts[index] = sdk.FunctionResultFact{
+			TypeID:             provider.TypeID(original),
+			CanonicalTypeID:    provider.TypeID(canonical),
+			Kind:               kind,
+			NamedOriginPackage: originPackage,
+			NamedOriginName:    originName,
+		}
+	}
+	return sdk.EncodeFunctionResultFacts(facts)
+}
+
+func toolGoTypeKind(value types.Type) (sdk.GoTypeKind, error) {
+	switch value.(type) {
+	case *types.Array:
+		return sdk.GoTypeArray, nil
+	case *types.Basic:
+		return sdk.GoTypeBasic, nil
+	case *types.Chan:
+		return sdk.GoTypeChannel, nil
+	case *types.Interface:
+		return sdk.GoTypeInterface, nil
+	case *types.Map:
+		return sdk.GoTypeMap, nil
+	case *types.Pointer:
+		return sdk.GoTypePointer, nil
+	case *types.Signature:
+		return sdk.GoTypeSignature, nil
+	case *types.Slice:
+		return sdk.GoTypeSlice, nil
+	case *types.Struct:
+		return sdk.GoTypeStruct, nil
+	case *types.Tuple:
+		return sdk.GoTypeTuple, nil
+	case *types.TypeParam:
+		return sdk.GoTypeTypeParameter, nil
+	case *types.Union:
+		return sdk.GoTypeUnion, nil
+	default:
+		return "", fmt.Errorf(
+			"go type %T has no supported effective kind",
+			value,
+		)
+	}
 }
 
 func toolArgumentJSON(value annotation.Value) (json.RawMessage, error) {

@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "minimum": "v0.1.0-preview.1",
-  "current": "v0.1.0-preview.1",
-  "spice_agent": "v0.0.0-20260806191411-841edd3d47ad",
-  "toolchain": "v0.1.0-preview.1",
+  "minimum": "v0.1.0-preview.1.0.20260806200749-524424a04df0",
+  "current": "v0.1.0-preview.1.0.20260806200749-524424a04df0",
+  "spice_agent": "v0.0.0-20260806204214-1f072842707a",
+  "toolchain": "v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6",
   "go": "1.26.5"
 }

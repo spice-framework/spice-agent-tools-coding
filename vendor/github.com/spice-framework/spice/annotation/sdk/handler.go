@@ -23,7 +23,9 @@ type Declaration struct {
 	ParameterTypeID string `json:"parameter_type_id,omitempty"`
 }
 
-// Invocation is one normalized explicit descriptor invocation.
+// Invocation is one normalized explicit descriptor invocation. Facts is an
+// extensible v1alpha2 string map: SDK-owned namespaces add bounded semantic
+// metadata without changing the wire struct seen by older strict decoders.
 type Invocation struct {
 	DescriptorPackage string               `json:"descriptor_package"`
 	DescriptorSymbol  string               `json:"descriptor_symbol"`

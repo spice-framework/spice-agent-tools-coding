@@ -8,7 +8,7 @@ Install the module and exact Spice compiler tool:
 
 ```text
 go get github.com/spice-framework/spice-agent-tools-coding@<version>
-go get -tool github.com/spice-framework/toolchain/cmd/spice@v0.1.0-preview.1
+go get -tool github.com/spice-framework/toolchain/cmd/spice@v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6
 ```
 
 Applications opt into defaults only with:

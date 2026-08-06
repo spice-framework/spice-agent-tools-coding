@@ -1,4 +1,3 @@
-// Package tool defines provider-neutral immutable executable tool contracts.
 package tool
 
 import (

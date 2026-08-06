@@ -23,10 +23,12 @@ import (
 )
 
 const (
-	modulePath      = "github.com/spice-framework/spice-agent-tools-coding"
-	requiredGo      = "go1.26.5"
-	minimumCoverage = 85.0
-	agentVersion    = "v0.0.0-20260806191411-841edd3d47ad"
+	modulePath       = "github.com/spice-framework/spice-agent-tools-coding"
+	requiredGo       = "go1.26.5"
+	minimumCoverage  = 85.0
+	coreVersion      = "v0.1.0-preview.1.0.20260806200749-524424a04df0"
+	toolchainVersion = "v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6"
+	agentVersion     = "v0.0.0-20260806204214-1f072842707a"
 )
 
 func main() {
@@ -188,10 +190,33 @@ func checkContracts(root string) error {
 	if err != nil {
 		return fmt.Errorf("read go.mod: %w", err)
 	}
-	if !bytes.Contains(module, []byte("github.com/spice-framework/spice-agent "+agentVersion)) ||
-		bytes.Contains(module, []byte("replace github.com/spice-framework/spice-agent")) {
-		return errors.New("go.mod must require the exact Spice Agent core pin without a replace directive")
+	if err := checkModuleSelections(module); err != nil {
+		return err
 	}
+	if err := checkToolsModule(root); err != nil {
+		return err
+	}
+	return checkCompatibility(root)
+}
+
+func checkModuleSelections(module []byte) error {
+	for modulePath, version := range map[string]string{
+		"github.com/spice-framework/spice":       coreVersion,
+		"github.com/spice-framework/toolchain":   toolchainVersion,
+		"github.com/spice-framework/spice-agent": agentVersion,
+	} {
+		if !bytes.Contains(module, []byte(modulePath+" "+version)) ||
+			bytes.Contains(module, []byte("replace "+modulePath)) {
+			return fmt.Errorf("go.mod must require the exact %s pin without a replace directive", modulePath)
+		}
+	}
+	if !bytes.Contains(module, []byte("tool github.com/spice-framework/toolchain/cmd/spice")) {
+		return errors.New("go.mod must authorize the exact Spice toolchain command")
+	}
+	return nil
+}
+
+func checkToolsModule(root string) error {
 	toolsModule, err := os.ReadFile(filepath.Join(root, "tools", "go.mod")) // #nosec G304 -- repository-owned fixed path.
 	if err != nil {
 		return fmt.Errorf("read tools/go.mod: %w", err)
@@ -199,6 +224,10 @@ func checkContracts(root string) error {
 	if !bytes.Contains(toolsModule, []byte("google.golang.org/grpc v1.82.1")) {
 		return errors.New("tools/go.mod must retain patched google.golang.org/grpc v1.82.1")
 	}
+	return nil
+}
+
+func checkCompatibility(root string) error {
 	metadata, err := os.ReadFile(filepath.Join(root, "spice-compatibility.json")) // #nosec G304 -- fixed metadata path.
 	if err != nil {
 		return fmt.Errorf("read compatibility metadata: %w", err)
@@ -213,8 +242,8 @@ func checkContracts(root string) error {
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
 		return errors.New("compatibility metadata contains trailing JSON values")
 	}
-	if value.Schema != 1 || value.Minimum != "v0.1.0-preview.1" || value.Current != "v0.1.0-preview.1" ||
-		value.SpiceAgent != agentVersion || value.Toolchain != "v0.1.0-preview.1" || value.Go != "1.26.5" {
+	if value.Schema != 1 || value.Minimum != coreVersion || value.Current != coreVersion ||
+		value.SpiceAgent != agentVersion || value.Toolchain != toolchainVersion || value.Go != "1.26.5" {
 		return errors.New("compatibility metadata does not match the exact verified framework selections")
 	}
 	return nil
