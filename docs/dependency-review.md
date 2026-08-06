@@ -7,7 +7,7 @@ toolchain remain the framework/build dependencies at `v0.1.0-preview.1`. Spice
 Agent is pinned at `v0.0.0-20260806183953-eaf19180429a` for its public immutable
 tool contract. `golang.org/x/sys/windows` v0.47.0 is the sole non-framework
 runtime package and is compiled only on Windows for Job Object ownership and
-the typed Windows ABI/error support around atomic file replacement.
+typed status classification around root-contained atomic replacement.
 
 ## Maintenance and license
 
@@ -33,9 +33,11 @@ Windows dependency.
   start. Same-user concurrent mutation remains explicitly trusted.
 - Replace performs expected-digest checks before and immediately before atomic
   commit. This is stale detection, not an external-writer filesystem CAS.
-- Windows existing-target replacement uses `ReplaceFileW`. Retries are bounded,
-  cancellation-aware, limited to sharing/lock violations, and repeat the digest
-  and regular non-symbolic-link checks before every commit attempt.
+- Windows existing-target replacement remains inside `os.Root`. Retries are
+  bounded and cancellation-aware for access-denied, sharing, and lock statuses;
+  every attempt repeats the digest and regular non-symbolic-link checks. A real
+  ACL denial exhausts to `replace_failed`; retryability does not assert that an
+  error was transient.
 - Windows Job Objects and Unix process groups own child trees; forced-wait
   completion is bounded and unconfirmed termination is returned explicitly.
 

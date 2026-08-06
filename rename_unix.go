@@ -8,4 +8,4 @@ func renameWithinRoot(workspace *os.Root, oldName, newName string) error {
 	return workspace.Rename(oldName, newName)
 }
 
-func isTransientRenameError(error) bool { return false }
+func isRetryableRenameError(error) bool { return false }

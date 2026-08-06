@@ -14,7 +14,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func TestReplaceRetriesTransientWindowsRenameWithFreshStaleCheck(t *testing.T) {
+func TestReplaceRetriesSharingViolationWithFreshStaleCheck(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	path := filepath.Join(root, "value")
@@ -49,6 +49,26 @@ func TestReplaceRetriesTransientWindowsRenameWithFreshStaleCheck(t *testing.T) {
 	assertFileContent(t, path, "second")
 }
 
+func TestReplaceRetriesWindowsAccessDeniedThenSucceeds(t *testing.T) {
+	t.Parallel()
+	replacer, path := newWindowsRenameTestTool(t)
+	attempts := 0
+	replacer.renameTarget = func(workspace *os.Root, oldName, newName string) error {
+		attempts++
+		if attempts == 1 {
+			return windows.ERROR_ACCESS_DENIED
+		}
+		return renameWithinRoot(workspace, oldName, newName)
+	}
+	result := executeWindowsRenameTest(t, replacer)
+	content := decodeContent[replaceContent](t, result)
+	if !content.OK || attempts != 2 {
+		problem, _ := result.Problem()
+		t.Fatalf("replace = %#v, attempts = %d, problem = %q", content, attempts, problem)
+	}
+	assertFileContent(t, path, "second")
+}
+
 func TestReplaceExhaustsPersistentTransientWindowsRename(t *testing.T) {
 	t.Parallel()
 	replacer, path := newWindowsRenameTestTool(t)
@@ -56,6 +76,22 @@ func TestReplaceExhaustsPersistentTransientWindowsRename(t *testing.T) {
 	replacer.renameTarget = func(*os.Root, string, string) error {
 		attempts++
 		return windows.ERROR_LOCK_VIOLATION
+	}
+	result := executeWindowsRenameTest(t, replacer)
+	requireProblem(t, result, "could not be committed")
+	if attempts != maximumRenameAttempts {
+		t.Fatalf("rename attempts = %d, want %d", attempts, maximumRenameAttempts)
+	}
+	assertFileContent(t, path, "first")
+}
+
+func TestReplaceExhaustsPersistentWindowsAccessDenied(t *testing.T) {
+	t.Parallel()
+	replacer, path := newWindowsRenameTestTool(t)
+	attempts := 0
+	replacer.renameTarget = func(*os.Root, string, string) error {
+		attempts++
+		return windows.ERROR_ACCESS_DENIED
 	}
 	result := executeWindowsRenameTest(t, replacer)
 	requireProblem(t, result, "could not be committed")

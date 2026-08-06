@@ -20,8 +20,8 @@ import (
 const replaceInputSchema = `{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string","minLength":1},"content":{"type":"string"},"expected_sha256":{"type":"string"},"create":{"type":"boolean"}}}`
 
 const (
-	maximumRenameAttempts = 8
-	renameRetryDelay      = 10 * time.Millisecond
+	maximumRenameAttempts = 64
+	renameRetryDelay      = 25 * time.Millisecond
 )
 
 type replaceTool struct {
@@ -274,7 +274,7 @@ func (replacer *replaceTool) commitReplace(
 		if err == nil {
 			return nil
 		}
-		if !isTransientRenameError(err) || attempt == maximumRenameAttempts-1 {
+		if !isRetryableRenameError(err) || attempt == maximumRenameAttempts-1 {
 			return executionFailure("replace_failed", "atomic replacement could not be committed")
 		}
 		if err := waitForRenameRetry(ctx); err != nil {

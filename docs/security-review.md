@@ -21,3 +21,8 @@ read paging, bounded shell capture, Unix process groups, and Windows Job
 Objects. The architecture-proof distribution still treats the same-user
 final-check/rename and path-based process-start races as documented trust
 boundaries, not hidden sandbox claims.
+
+Windows replacement deliberately remains `os.Root.Rename`. Deriving an
+absolute path from `os.Root.OpenRoot` and `Root.Name` would not make a later
+Win32 replacement handle-relative; a same-user parent rename or reparse-point
+swap could redirect that absolute operation outside the validated root.
