@@ -60,3 +60,29 @@ func TestTreeDigests(t *testing.T) {
 		t.Fatalf("treeDigests() did not detect change: %v", err)
 	}
 }
+
+func TestCheckContracts(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGateFile(t, root, "go.mod", "require github.com/spice-framework/spice-agent "+agentVersion+"\n")
+	writeGateFile(t, root, "tools/go.mod", "require google.golang.org/grpc v1.82.1 // indirect\n")
+	writeGateFile(t, root, "spice-compatibility.json", `{"schema":1,"minimum":"v0.1.0-preview.1","current":"v0.1.0-preview.1","spice_agent":"`+agentVersion+`","toolchain":"v0.1.0-preview.1","go":"1.26.5"}`)
+	if err := checkContracts(root); err != nil {
+		t.Fatal(err)
+	}
+	writeGateFile(t, root, "go.mod", "require github.com/spice-framework/spice-agent "+agentVersion+"\nreplace github.com/spice-framework/spice-agent => ../spice-agent\n")
+	if err := checkContracts(root); err == nil || !strings.Contains(err.Error(), "without a replace") {
+		t.Fatalf("checkContracts() error = %v", err)
+	}
+}
+
+func writeGateFile(t *testing.T, root, name, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

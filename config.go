@@ -6,30 +6,36 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/spice-framework/spice-agent/tool"
 )
 
 const (
-	defaultMaxReadBytes  int64 = 4 << 20
-	defaultMaxWriteBytes int64 = 4 << 20
-	defaultMaxOutput     int64 = 2 << 20
-	maximumBytes         int64 = 64 << 20
+	defaultMaxReadBytes  int64 = 256 << 10
+	defaultMaxWriteBytes int64 = 256 << 10
+	defaultMaxOutput     int64 = 256 << 10
+	maximumBytes         int64 = tool.MaximumPayloadBytes / 2
 	defaultTimeout             = 2 * time.Minute
 )
 
 // SecurityWarning describes the privilege boundary applications must display
 // on first run and in help output.
-const SecurityWarning = "Coding tools run with your process privileges; no sandbox or permission prompt is active."
+const SecurityWarning = "Coding tools can read and write files, execute processes, and use network or environment access with your operating-system privileges; no sandbox or approval prompt is active."
 
 // Config defines one bounded tool suite rooted at an absolute worktree path.
 type Config struct {
 	Root           string        `spice:"root,required,env=SPICE_AGENT_WORKTREE"`
-	MaxReadBytes   int64         `spice:"max-read-bytes,default=4194304"`
-	MaxWriteBytes  int64         `spice:"max-write-bytes,default=4194304"`
-	MaxOutputBytes int64         `spice:"max-output-bytes,default=2097152"`
+	MaxReadBytes   int64         `spice:"max-read-bytes,default=262144"`
+	MaxWriteBytes  int64         `spice:"max-write-bytes,default=262144"`
+	MaxOutputBytes int64         `spice:"max-output-bytes,default=262144"`
 	CommandTimeout time.Duration `spice:"command-timeout,default=2m"`
+	// EnvironmentAllowlist names host variables inherited by shell children.
+	// Values never appear in tool arguments or results.
+	EnvironmentAllowlist []string `spice:"environment-allowlist"`
 }
 
 // Risk identifies the privilege class disclosed by a capability.
@@ -70,14 +76,14 @@ func New(config Config) (*Suite, error) {
 		capabilities: []Capability{
 			{Name: "read", Description: "Read a bounded file within the configured worktree.", Risk: RiskRead},
 			{Name: "replace", Description: "Atomically replace expected content within the configured worktree.", Risk: RiskWrite},
-			{Name: "shell", Description: "Execute a bounded, cancelable process within the configured worktree.", Risk: RiskProcess},
+			{Name: "shell", Description: "Execute an unsandboxed bounded process with the user's privileges.", Risk: RiskProcess},
 		},
 	}, nil
 }
 
 // Config returns the normalized immutable configuration value.
 func (suite *Suite) Config() Config {
-	return suite.config
+	return cloneConfig(suite.config)
 }
 
 // Capabilities returns a defensive copy ordered by stable tool name.
@@ -99,6 +105,10 @@ func normalize(config Config) Config {
 	if config.CommandTimeout == 0 {
 		config.CommandTimeout = defaultTimeout
 	}
+	if len(config.EnvironmentAllowlist) == 0 {
+		config.EnvironmentAllowlist = defaultEnvironmentAllowlist()
+	}
+	config.EnvironmentAllowlist = normalizeEnvironmentAllowlist(config.EnvironmentAllowlist)
 	return config
 }
 
@@ -122,5 +132,42 @@ func (config Config) validate() error {
 	if config.CommandTimeout <= 0 || config.CommandTimeout > 30*time.Minute {
 		return errors.New("coding tool command timeout must be greater than zero and no more than 30m")
 	}
+	for _, name := range config.EnvironmentAllowlist {
+		if name == "" || strings.ContainsAny(name, "=\x00") {
+			return fmt.Errorf("coding tool environment name %q is invalid", name)
+		}
+	}
 	return nil
+}
+
+func cloneConfig(config Config) Config {
+	config.EnvironmentAllowlist = slices.Clone(config.EnvironmentAllowlist)
+	return config
+}
+
+func normalizeEnvironmentAllowlist(names []string) []string {
+	result := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, value := range names {
+		name := strings.TrimSpace(value)
+		identity := name
+		if runtime.GOOS == "windows" {
+			identity = strings.ToUpper(name)
+			name = identity
+		}
+		if _, duplicate := seen[identity]; duplicate {
+			continue
+		}
+		seen[identity] = struct{}{}
+		result = append(result, name)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func defaultEnvironmentAllowlist() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"COMSPEC", "PATH", "PATHEXT", "SYSTEMROOT", "TEMP", "TMP", "WINDIR"}
+	}
+	return []string{"HOME", "LANG", "PATH", "TMPDIR"}
 }

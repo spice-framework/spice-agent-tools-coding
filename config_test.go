@@ -17,8 +17,12 @@ func TestNewNormalizesDefaultsAndDisclosesCapabilities(t *testing.T) {
 	config := suite.Config()
 	if config.Root != filepath.Clean(root) || config.MaxReadBytes != defaultMaxReadBytes ||
 		config.MaxWriteBytes != defaultMaxWriteBytes || config.MaxOutputBytes != defaultMaxOutput ||
-		config.CommandTimeout != defaultTimeout {
+		config.CommandTimeout != defaultTimeout || len(config.EnvironmentAllowlist) == 0 {
 		t.Fatalf("Suite.Config() = %#v", config)
+	}
+	config.EnvironmentAllowlist[0] = "CHANGED"
+	if suite.Config().EnvironmentAllowlist[0] == "CHANGED" {
+		t.Fatal("Suite.Config() did not return a defensive environment copy")
 	}
 	capabilities := suite.Capabilities()
 	if len(capabilities) != 3 || capabilities[0].Name != "read" ||
@@ -45,6 +49,8 @@ func TestNewRejectsInvalidBounds(t *testing.T) {
 		{name: "output high", config: Config{Root: root, MaxOutputBytes: maximumBytes + 1}, want: "max output bytes"},
 		{name: "timeout low", config: Config{Root: root, CommandTimeout: -time.Second}, want: "command timeout"},
 		{name: "timeout high", config: Config{Root: root, CommandTimeout: 31 * time.Minute}, want: "command timeout"},
+		{name: "environment empty", config: Config{Root: root, EnvironmentAllowlist: []string{"PATH", " "}}, want: "environment name"},
+		{name: "environment equals", config: Config{Root: root, EnvironmentAllowlist: []string{"BAD=VALUE"}}, want: "environment name"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,11 +65,12 @@ func TestNewRejectsInvalidBounds(t *testing.T) {
 
 func TestSecurityWarningAndManifest(t *testing.T) {
 	t.Parallel()
-	if !strings.Contains(SecurityWarning, "no sandbox") || !strings.Contains(SecurityWarning, "process privileges") {
+	if !strings.Contains(SecurityWarning, "no sandbox") || !strings.Contains(SecurityWarning, "operating-system privileges") {
 		t.Fatalf("SecurityWarning = %q", SecurityWarning)
 	}
 	spec := Manifest().Spec()
-	if spec.Module != "github.com/spice-framework/spice-agent-tools-coding" || len(spec.Capabilities) != 3 {
+	if spec.Module != "github.com/spice-framework/spice-agent-tools-coding" || len(spec.Capabilities) != 7 ||
+		len(spec.Activation.EntryPoints) != 3 {
 		t.Fatalf("Manifest().Spec() = %#v", spec)
 	}
 }

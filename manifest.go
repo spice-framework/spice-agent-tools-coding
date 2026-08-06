@@ -15,15 +15,20 @@ func Manifest() spicestarter.Manifest {
 		Review:    "docs/dependency-review.md",
 		Activation: spicestarter.Activation{
 			Mode: spicestarter.ActivationExplicitConstructor,
-			EntryPoints: []spicestarter.EntryPoint{{
-				Package: "github.com/spice-framework/spice-agent-tools-coding",
-				Symbol:  "New",
-			}},
+			EntryPoints: []spicestarter.EntryPoint{
+				{Package: "github.com/spice-framework/spice-agent-tools-coding", Symbol: "NewRead"},
+				{Package: "github.com/spice-framework/spice-agent-tools-coding", Symbol: "NewReplace"},
+				{Package: "github.com/spice-framework/spice-agent-tools-coding", Symbol: "NewShell"},
+			},
 		},
 		Capabilities: []string{
 			"agent.tool.filesystem.read",
 			"agent.tool.filesystem.write",
 			"agent.tool.process.execute",
+			"agent.tool.network.access",
+			"agent.tool.secrets.read",
+			"agent.tool.environment.read",
+			"agent.tool.environment.write",
 		},
 	})
 }

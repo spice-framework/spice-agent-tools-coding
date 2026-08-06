@@ -1,14 +1,12 @@
 # Roadmap
 
-The canonical cross-repository program is maintained in
-`spice-agent/docs/implementation/README.md`.
+Program status, ordering, and exit evidence live only in the canonical
+[Spice Agent implementation ledger](https://github.com/spice-framework/spice-agent/blob/main/docs/implementation/README.md).
+This repository does not maintain a second phase table.
 
-| Phase | Repository outcome | Status |
-|---|---|---|
-| 0 | Governance, exact pins, bounded configuration, capability disclosure, manifest, explicit autoconfiguration, and quality gates | in progress |
-| 3 | Read, atomic replace/write, and shell implementations with cancellation and bounded output | blocked on tagged core tool API |
-| 6 | Distribution acceptance and signed architecture-proof preview | planned |
-| 7 | Optional permission decorator proving dispatcher interception | planned in a separate experimental module |
-
-The architecture-proof line intentionally runs with the user's process
-privileges. It does not claim sandboxing or approval enforcement.
+Its bounded coding-tools outcome is exact read, stale-protected atomic
+replace/write, and shell `tool.Tool` bindings; explicit fallback
+autoconfiguration; cancellation and process-tree cleanup; bounded inputs and
+outputs; honest capability metadata; and Windows/Linux acceptance evidence.
+Release compatibility is recorded only after the corresponding immutable core
+version and full local verification are green.

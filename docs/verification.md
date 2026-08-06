@@ -8,4 +8,8 @@
 
 The verifier is repository-owned Go and is cross-platform. It never rewrites
 product source. `make fmt` is the only formatting target that mutates Go files.
-Phase 3 adds platform-specific cancellation and process-tree integration tests.
+Product tests exercise traversal and symlink escape, paging and encoded payload
+bounds, create/replace/stale/race behavior, committed durability uncertainty,
+strict argv/workdir/environment policy, output truncation, cancellation,
+timeouts, descendant cleanup, fallback DI, and concurrency. Windows uses a real
+Job Object; Unix uses a real process group.
