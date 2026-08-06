@@ -49,7 +49,7 @@ Read and replace paths use `os.Root`. Shell workdirs reject symbolic-link
 components and are revalidated before start, but same-user concurrent path
 mutation remains a trust boundary. Expected hashes detect ordinary stale
 writes; they are not an atomic filesystem compare-and-swap against another
-process racing the final rename.
+process racing the final commit.
 
 See [the dependency review](docs/dependency-review.md),
 [security review](docs/security-review.md), and [support matrix](docs/support.md).

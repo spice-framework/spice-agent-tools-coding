@@ -10,7 +10,7 @@ func Manifest() spicestarter.Manifest {
 		Version:   "0.1.0-dev",
 		Module:    "github.com/spice-framework/spice-agent-tools-coding",
 		SpiceAPI:  spicestarter.APIVersion,
-		MinimumGo: "1.26",
+		MinimumGo: "1.26.5",
 		License:   "Apache-2.0",
 		Review:    "docs/dependency-review.md",
 		Activation: spicestarter.Activation{
@@ -29,6 +29,18 @@ func Manifest() spicestarter.Manifest {
 			"agent.tool.secrets.read",
 			"agent.tool.environment.read",
 			"agent.tool.environment.write",
+		},
+		Dependencies: []spicestarter.Dependency{
+			{
+				Module:  "github.com/spice-framework/spice-agent",
+				Version: "v0.0.0-20260806183953-eaf19180429a",
+				License: "Apache-2.0",
+			},
+			{
+				Module:  "golang.org/x/sys",
+				Version: "v0.47.0",
+				License: "BSD-3-Clause",
+			},
 		},
 	})
 }

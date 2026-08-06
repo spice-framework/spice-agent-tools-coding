@@ -12,17 +12,24 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spice-framework/spice-agent/tool"
 )
 
 const replaceInputSchema = `{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string","minLength":1},"content":{"type":"string"},"expected_sha256":{"type":"string"},"create":{"type":"boolean"}}}`
 
+const (
+	maximumRenameAttempts = 8
+	renameRetryDelay      = 10 * time.Millisecond
+)
+
 type replaceTool struct {
 	config       Config
 	definition   tool.Definition
 	beforeCommit func()
 	syncParent   func(*os.Root, string) error
+	renameTarget func(*os.Root, string, string) error
 	commitLease  chan struct{}
 }
 
@@ -62,7 +69,8 @@ func NewReplace(config Config) (tool.Tool, error) {
 		return nil, err
 	}
 	return &replaceTool{
-		config: normalized, definition: definition, syncParent: syncDirectory, commitLease: make(chan struct{}, 1),
+		config: normalized, definition: definition, syncParent: syncDirectory,
+		renameTarget: renameWithinRoot, commitLease: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -155,7 +163,7 @@ func (replacer *replaceTool) replace(
 	if arguments.Create {
 		err = commitCreate(workspace, temporary, path.native)
 	} else {
-		err = replacer.commitReplace(workspace, temporary, path, arguments.ExpectedSHA256)
+		err = replacer.commitReplace(ctx, workspace, temporary, path, arguments.ExpectedSHA256)
 	}
 	if err != nil {
 		return replaceContent{}, "", err
@@ -241,26 +249,50 @@ func (replacer *replaceTool) preflight(workspace *os.Root, path relativePath, ar
 }
 
 func (replacer *replaceTool) commitReplace(
+	ctx context.Context,
 	workspace *os.Root,
 	temporary string,
 	path relativePath,
 	expected string,
 ) error {
-	digest, err := boundedDigest(workspace, path.native, replacer.config.MaxWriteBytes)
-	if err != nil {
-		return err
+	for attempt := range maximumRenameAttempts {
+		if err := contextFailure(ctx); err != nil {
+			return err
+		}
+		digest, err := boundedDigest(workspace, path.native, replacer.config.MaxWriteBytes)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal([]byte(digest), []byte(expected)) {
+			return executionFailure("stale", "replace target changed before the atomic commit")
+		}
+		info, err := workspace.Lstat(path.native)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return executionFailure("stale", "replace target changed before the atomic commit")
+		}
+		err = replacer.renameTarget(workspace, temporary, path.native)
+		if err == nil {
+			return nil
+		}
+		if !isTransientRenameError(err) || attempt == maximumRenameAttempts-1 {
+			return executionFailure("replace_failed", "atomic replacement could not be committed")
+		}
+		if err := waitForRenameRetry(ctx); err != nil {
+			return err
+		}
 	}
-	if !bytes.Equal([]byte(digest), []byte(expected)) {
-		return executionFailure("stale", "replace target changed before the atomic commit")
+	return executionFailure("replace_failed", "atomic replacement could not be committed")
+}
+
+func waitForRenameRetry(ctx context.Context) error {
+	timer := time.NewTimer(renameRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return executionFailure("cancelled", "tool operation was cancelled")
+	case <-timer.C:
+		return nil
 	}
-	info, err := workspace.Lstat(path.native)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return executionFailure("stale", "replace target changed before the atomic commit")
-	}
-	if err := workspace.Rename(temporary, path.native); err != nil {
-		return executionFailure("replace_failed", "atomic replacement could not be committed")
-	}
-	return nil
 }
 
 func commitCreate(workspace *os.Root, temporary, target string) error {

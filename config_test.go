@@ -2,9 +2,12 @@ package coding
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	spicestarter "github.com/spice-framework/spice/annotation/sdk/starter"
 )
 
 func TestNewNormalizesDefaultsAndDisclosesCapabilities(t *testing.T) {
@@ -70,7 +73,22 @@ func TestSecurityWarningAndManifest(t *testing.T) {
 	}
 	spec := Manifest().Spec()
 	if spec.Module != "github.com/spice-framework/spice-agent-tools-coding" || len(spec.Capabilities) != 7 ||
-		len(spec.Activation.EntryPoints) != 3 {
+		spec.MinimumGo != "1.26.5" || len(spec.Activation.EntryPoints) != 3 || len(spec.Dependencies) != 2 {
 		t.Fatalf("Manifest().Spec() = %#v", spec)
+	}
+	wantDependencies := []spicestarter.Dependency{
+		{
+			Module:  "github.com/spice-framework/spice-agent",
+			Version: "v0.0.0-20260806183953-eaf19180429a",
+			License: "Apache-2.0",
+		},
+		{
+			Module:  "golang.org/x/sys",
+			Version: "v0.47.0",
+			License: "BSD-3-Clause",
+		},
+	}
+	if !slices.Equal(spec.Dependencies, wantDependencies) {
+		t.Fatalf("Manifest().Spec().Dependencies = %#v", spec.Dependencies)
 	}
 }

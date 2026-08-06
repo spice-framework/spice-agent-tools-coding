@@ -10,11 +10,11 @@ does not register tools at runtime.
 Read opens relative files through `os.Root`, returns bounded offset/limit pages,
 and changes to base64 when byte content or JSON escaping requires it. Replace
 writes and syncs a same-directory temporary file, revalidates the expected
-SHA-256 immediately before an atomic link or rename, and reports separately
+SHA-256 immediately before an atomic link or replacement, and reports separately
 whether the update committed and whether durability was confirmed. A
 per-instance lease serializes Spice-originated writes. The expected digest is
 stale-write protection, not a filesystem compare-and-swap against another
-process changing the file in the final check/rename interval.
+process changing the file in the final check/commit interval.
 
 Shell executes discrete argv without a shell. Its initial working directory is
 opened through `os.Root`, symbolic-link components are rejected and revalidated,

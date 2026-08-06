@@ -15,8 +15,8 @@ resource.
 Read and replace operations use Go's traversal-resistant `os.Root`. Replace
 serializes calls per tool instance, rejects symbolic-link targets, writes and
 syncs a same-directory temporary file, rechecks the expected digest immediately
-before commit, and uses atomic rename or no-overwrite hard-link creation. An
-external same-user writer can still race the final check and rename because the
+before commit, and uses atomic replacement or no-overwrite hard-link creation. An
+external same-user writer can still race the final check and commit because the
 portable filesystem contract has no conditional compare-and-swap primitive.
 
 Shell uses discrete argv, rejects symbolic-link workdir components, revalidates

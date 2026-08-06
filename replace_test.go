@@ -17,9 +17,19 @@ import (
 func TestReplaceCreatesAndAtomicallyReplaces(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	replacer, err := NewReplace(Config{Root: root, MaxWriteBytes: 64})
+	constructed, err := NewReplace(Config{Root: root, MaxWriteBytes: 64})
 	if err != nil {
 		t.Fatal(err)
+	}
+	replacer, ok := constructed.(*replaceTool)
+	if !ok {
+		t.Fatalf("NewReplace() type = %T", constructed)
+	}
+	rename := replacer.renameTarget
+	var lastRenameErr error
+	replacer.renameTarget = func(workspace *os.Root, oldName, newName string) error {
+		lastRenameErr = rename(workspace, oldName, newName)
+		return lastRenameErr
 	}
 	created := replacer.Execute(t.Context(), makeCall(t, "replace", map[string]any{
 		"path": "nested.txt", "content": "first", "create": true,
@@ -37,7 +47,8 @@ func TestReplaceCreatesAndAtomicallyReplaces(t *testing.T) {
 	replacedContent := decodeContent[replaceContent](t, replaced)
 	if !replacedContent.OK || replacedContent.Created || !replacedContent.Committed || !replacedContent.Durable ||
 		!replacedContent.TemporaryCleaned {
-		t.Fatalf("replace result = %#v", replacedContent)
+		problem, _ := replaced.Problem()
+		t.Fatalf("replace result = %#v, problem = %q, rename error = %#v", replacedContent, problem, lastRenameErr)
 	}
 	assertFileContent(t, filepath.Join(root, "nested.txt"), "second")
 	matches, err := filepath.Glob(filepath.Join(root, ".spice-replace-*.tmp"))

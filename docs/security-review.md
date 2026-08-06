@@ -8,7 +8,7 @@ must be shown on first run and in help output.
 | Risk | Required control |
 |---|---|
 | Worktree escape | Resolve against the configured absolute root and reject traversal, volume changes, and symlink/reparse-point escape. |
-| Lost update | Replace only the expected SHA-256 digest and use same-directory atomic rename. |
+| Lost update | Replace only the expected SHA-256 digest and use same-directory atomic replacement. |
 | Partial write | Write, sync, and close a temporary file before atomic replacement; clean up on every failure. |
 | Unbounded input/output | Enforce configured byte limits before allocation and while streaming. |
 | Hung or orphan process | Apply caller context and timeout and terminate the complete process tree on Windows and Unix. |
