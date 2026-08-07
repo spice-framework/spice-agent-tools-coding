@@ -1,4 +1,4 @@
-.PHONY: tools-bootstrap fast check fmt verify
+.PHONY: tools-bootstrap fast check fmt verify verify-release
 
 tools-bootstrap:
 	go run ./internal/qualitygate -mode=tools-bootstrap
@@ -14,3 +14,5 @@ fmt:
 
 verify:
 	go run ./internal/qualitygate -mode=verify
+
+verify-release: verify

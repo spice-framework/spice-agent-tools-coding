@@ -251,6 +251,13 @@ func TestCheckContracts(t *testing.T) {
 	writeGateFile(t, root, "go.mod", module)
 	writeGateFile(t, root, "tools/go.mod", "require google.golang.org/grpc v1.82.1 // indirect\n")
 	writeGateFile(t, root, "spice-compatibility.json", `{"schema":1,"minimum":"`+coreVersion+`","current":"`+coreVersion+`","spice_agent":"`+agentVersion+`","toolchain":"`+toolchainVersion+`","go":"1.26.5"}`)
+	writeGateFile(t, root, "spice-release.json", "{\n"+
+		"  \"schema\": 1,\n"+
+		"  \"profile\": \""+releaseProfile+"\",\n"+
+		"  \"repository\": \""+releaseRepository+"\",\n"+
+		"  \"module\": \""+modulePath+"\",\n"+
+		"  \"version\": \""+releaseVersion+"\"\n"+
+		"}\n")
 	if err := checkContracts(root); err != nil {
 		t.Fatal(err)
 	}

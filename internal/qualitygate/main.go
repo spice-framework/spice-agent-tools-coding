@@ -60,6 +60,9 @@ func run(ctx context.Context, root, mode string) error {
 	}
 	switch mode {
 	case "fast":
+		if err := checkReleaseMetadata(root); err != nil {
+			return err
+		}
 		return command(ctx, root, nil, "go", "test", "-shuffle=on", "-count=1", "./...")
 	case "fmt":
 		return format(ctx, root, true)
@@ -186,6 +189,9 @@ type compatibility struct {
 }
 
 func checkContracts(root string) error {
+	if err := checkReleaseMetadata(root); err != nil {
+		return err
+	}
 	module, err := os.ReadFile(filepath.Join(root, "go.mod")) // #nosec G304 -- repository-owned fixed path.
 	if err != nil {
 		return fmt.Errorf("read go.mod: %w", err)

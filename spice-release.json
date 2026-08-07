@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "profile": "go-module-v1",
+  "repository": "spice-agent-tools-coding",
+  "module": "github.com/spice-framework/spice-agent-tools-coding",
+  "version": "v0.1.0-preview.1"
+}
