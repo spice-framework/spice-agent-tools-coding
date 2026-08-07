@@ -6,8 +6,9 @@ This repository does not maintain a second phase table.
 
 Its bounded coding-tools outcome is exact read, stale-protected atomic
 replace/write, and shell `tool.Tool` bindings; explicit fallback
-autoconfiguration; cancellation and bounded managed process cleanup with an
-explicit detached-descendant boundary; bounded inputs and
+autoconfiguration; injected public process resolution/launch contracts;
+lifecycle-owned, cancellation-aware process cleanup with explicit ownership;
+bounded inputs and
 outputs; honest capability metadata; and Windows/Linux acceptance evidence.
 Release compatibility is recorded only after the corresponding immutable core
 version and full local verification are green.

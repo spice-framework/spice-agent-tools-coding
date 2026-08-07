@@ -20,13 +20,12 @@ external same-user writer can still race the final check and commit because the
 portable filesystem contract has no conditional compare-and-swap primitive.
 
 Shell uses discrete argv, rejects symbolic-link workdir components, revalidates
-them immediately before start, and inherits only configured environment names.
-Unix process groups and Windows kill-on-close Job Objects attempt bounded
-cleanup of the managed launcher and ordinary descendants. They are not a
-sandbox: Unix children may deliberately detach with `setsid`/`setpgid`, and a
-Windows child created before the launcher is attached to its Job Object is not
-captured by that job. `managed_cleanup_completed` confirms only that the
-requested launcher cleanup and wait completed without error. Incomplete managed
+them immediately before launch, and inherits only configured environment names.
+The consuming application injects the public executable resolver and process
+launcher; this module contains no platform launcher. Every non-nil returned
+process is retained immediately and ownership is released only after typed
+`Wait` success. `managed_cleanup_completed` confirms that join, not containment
+of resources the platform launcher never owned. Incomplete managed
 cleanup after start returns a direct uncertain, never-replayable execution
 failure rather than model-visible output. Output is bounded and truncation is
 explicit.

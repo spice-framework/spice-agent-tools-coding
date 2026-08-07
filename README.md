@@ -26,10 +26,14 @@ and inherited-environment allowlist. Direct composition uses exact factories:
 ```go
 read, err := coding.NewRead(config)
 replace, err := coding.NewReplace(config)
-shell, err := coding.NewShell(config)
+shell, cleanup, err := coding.NewShell(config, executableResolver, processLauncher)
 ```
 
-Each factory returns `tool.Tool` and performs no filesystem or process action.
+Construction performs no filesystem or process action. `NewShell` requires the
+public Spice Agent `process.ExecutableResolver` and `process.Launcher`
+interfaces and returns a Spice `lifecycle.Cleanup`; applications provide the
+platform implementation as ordinary typed beans. The coding-tools module does
+not contain a second `os/exec` launcher.
 The explicit `/autoconfigure` package contributes those same three factories as
 fallback beans through generated Spice DI; there is no global registry.
 
@@ -44,8 +48,10 @@ fallback beans through generated Spice DI; there is no global registry.
   A replacement whose content already has the expected digest is an explicit
   successful no-op (`changed=false`, `committed=false`).
 - `shell` accepts discrete argv and an optional relative workdir. It never
-  invokes a shell, inherits only application-allowlisted environment names, and
-  reports captured/observed byte counts plus deterministic truncation metadata.
+  invokes a command shell. It builds an immutable lookup from that argv,
+  canonical workdir, and the application-allowlisted environment, then launches
+  the resolver's exact absolute path through the injected launcher. It reports
+  captured/observed byte counts plus deterministic truncation metadata.
   It declares `mutating` and `unsafe` replay because an arbitrary process may
   have committed effects before its outcome becomes unavailable.
 
@@ -59,14 +65,15 @@ not infer replay safety from capabilities alone.
 > **Security warning:** these tools can read and write files, execute processes,
 > and use network or environment access with the operating-system user's
 > privileges. They provide no sandbox or approval prompt. The shell child's
-> authority is not confined to the configured worktree. Process groups and Job
-> Objects provide bounded managed cleanup, but deliberately detached descendants
-> may outlive the launcher; `managed_cleanup_completed` is not a containment
-> guarantee.
+> authority is not confined to the configured worktree. Platform containment
+> belongs to the injected launcher. `managed_cleanup_completed` means the
+> launcher's typed `Wait` proved its owned resources safe to release; it is not
+> a claim about descendants the platform implementation never owned.
 
 Read and replace paths use `os.Root`. Shell workdirs reject symbolic-link
-components and are revalidated before start, but same-user concurrent path
-mutation remains a trust boundary. Expected hashes detect ordinary stale
+components and are revalidated before launch; executable discovery uses only
+the explicit workdir and environment passed to the injected resolver. Same-user
+concurrent path mutation remains a trust boundary. Expected hashes detect ordinary stale
 writes; they are not an atomic filesystem compare-and-swap against another
 process racing the final commit.
 

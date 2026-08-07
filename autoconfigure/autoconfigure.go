@@ -4,7 +4,9 @@ package autoconfigure
 
 import (
 	coding "github.com/spice-framework/spice-agent-tools-coding"
+	"github.com/spice-framework/spice-agent/process"
 	"github.com/spice-framework/spice-agent/tool"
+	"github.com/spice-framework/spice/lifecycle"
 	"github.com/spice-framework/spice/starter"
 )
 
@@ -19,8 +21,12 @@ func DefaultReplace(config coding.Config) (tool.Tool, error) {
 }
 
 // DefaultShell constructs the fallback exact shell binding.
-func DefaultShell(config coding.Config) (tool.Tool, error) {
-	return coding.NewShell(config)
+func DefaultShell(
+	config coding.Config,
+	resolver process.ExecutableResolver,
+	launcher process.Launcher,
+) (tool.Tool, lifecycle.Cleanup, error) {
+	return coding.NewShell(config, resolver, launcher)
 }
 
 // SpiceAutoConfiguration is statically decoded by Spice and never executed

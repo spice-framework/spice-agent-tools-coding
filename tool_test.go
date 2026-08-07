@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spice-framework/spice-agent/process"
 	"github.com/spice-framework/spice-agent/stage"
 	"github.com/spice-framework/spice-agent/tool"
 )
@@ -65,7 +66,7 @@ func TestDefinitionsDeclareStableEffectReplayAndFingerprintContracts(t *testing.
 	}{
 		{name: "read", create: NewRead, effect: tool.EffectReadOnly, replay: tool.ReplaySafe},
 		{name: "replace", create: NewReplace, effect: tool.EffectMutating, replay: tool.ReplayIdempotent},
-		{name: "shell", create: NewShell, effect: tool.EffectMutating, replay: tool.ReplayUnsafe},
+		{name: "shell", create: newShellForSharedTest, effect: tool.EffectMutating, replay: tool.ReplayUnsafe},
 	}
 	fingerprints := make(map[string]string, len(factories))
 	for _, factory := range factories {
@@ -157,7 +158,7 @@ func TestDispatcherPreservesCodingToolReporterExecutionFailure(t *testing.T) {
 			arguments: map[string]any{"path": "must-not-exist", "content": "value", "create": true},
 		},
 		{
-			name: "shell", create: NewShell, retry: tool.RetryNever,
+			name: "shell", create: newShellForSharedTest, retry: tool.RetryNever,
 			arguments: map[string]any{"argv": []string{"must-not-execute"}},
 		},
 	}
@@ -197,6 +198,19 @@ func TestDispatcherPreservesCodingToolReporterExecutionFailure(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "must-not-exist")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejecting reporter allowed replace mutation: %v", err)
 	}
+}
+
+func newShellForSharedTest(config Config) (tool.Tool, error) {
+	implementation, _, err := NewShell(
+		config,
+		process.ResolverFunc(func(context.Context, process.Lookup) (string, error) {
+			return filepath.Join(config.Root, "tool"), nil
+		}),
+		process.LauncherFunc(func(context.Context, process.Spec) (process.Process, error) {
+			return nil, errors.New("shared constructor fixture must not launch")
+		}),
+	)
+	return implementation, err
 }
 
 func TestDispatcherDoesNotTreatReporterCancellationAsToolContextCancellation(t *testing.T) {

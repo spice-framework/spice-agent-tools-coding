@@ -5,15 +5,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
-	"time"
+	"sync"
 	"unicode/utf8"
 
+	"github.com/spice-framework/spice-agent/process"
 	"github.com/spice-framework/spice-agent/tool"
+	"github.com/spice-framework/spice/lifecycle"
 )
 
 const (
@@ -23,9 +24,18 @@ const (
 )
 
 type shellTool struct {
-	config     Config
-	definition tool.Definition
-	run        func(context.Context, *exec.Cmd, time.Duration) processOutcome
+	config       Config
+	definition   tool.Definition
+	resolver     process.ExecutableResolver
+	launcher     process.Launcher
+	ownershipMu  sync.Mutex
+	closing      bool
+	active       int
+	reservations int
+	owned        []*ownedProcess
+	drained      chan struct{}
+	drainedOnce  sync.Once
+	cleanupToken chan struct{}
 }
 
 type shellArguments struct {
@@ -36,7 +46,7 @@ type shellArguments struct {
 type shellContent struct {
 	OK                      bool   `json:"ok"`
 	Workdir                 string `json:"workdir"`
-	ExitCode                int    `json:"exit_code"`
+	ExitCode                int64  `json:"exit_code"`
 	Stdout                  string `json:"stdout"`
 	Stderr                  string `json:"stderr"`
 	Encoding                string `json:"encoding"`
@@ -49,10 +59,20 @@ type shellContent struct {
 
 // NewShell constructs the exact Spice Agent discrete-argv shell tool binding
 // without starting a process.
-func NewShell(config Config) (tool.Tool, error) {
+func NewShell(
+	config Config,
+	resolver process.ExecutableResolver,
+	launcher process.Launcher,
+) (tool.Tool, lifecycle.Cleanup, error) {
 	normalized, err := validatedConfig(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	if resolver == nil {
+		return nil, nil, errors.New("shell executable resolver must not be nil")
+	}
+	if launcher == nil {
+		return nil, nil, errors.New("shell process launcher must not be nil")
 	}
 	definition, err := tool.NewDefinition(
 		"shell",
@@ -69,9 +89,13 @@ func NewShell(config Config) (tool.Tool, error) {
 		tool.CapabilityEnvironmentWrite,
 	)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return &shellTool{config: normalized, definition: definition, run: runProcess}, nil
+	shell := &shellTool{
+		config: normalized, definition: definition, resolver: resolver, launcher: launcher,
+		drained: make(chan struct{}), cleanupToken: make(chan struct{}, 1),
+	}
+	return shell, shell.cleanup, nil
 }
 
 func (shell *shellTool) Definition() tool.Definition { return shell.definition.Clone() }
@@ -103,7 +127,12 @@ func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter to
 	); progressErr != nil {
 		return tool.Result{}, progressErr
 	}
-	content, problem, err := shell.execute(ctx, arguments.Argv, path)
+	lease, err := shell.beginExecution()
+	if err != nil {
+		return modelFailure(call.ID(), err)
+	}
+	defer lease.finish()
+	content, problem, err := shell.execute(ctx, arguments.Argv, path, lease)
 	if err != nil {
 		if uncertain, present := errors.AsType[executionUncertainty](err); present {
 			if uncertain.preserveContext {
@@ -113,7 +142,7 @@ func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter to
 				)
 			}
 			return tool.Result{}, infrastructureFailure(
-				call.ID(), tool.ExecutionUncertain, tool.RetryNever,
+				call.ID(), uncertain.state, tool.RetryNever,
 				uncertain.message,
 			)
 		}
@@ -129,14 +158,19 @@ func (shell *shellTool) Execute(ctx context.Context, call tool.Call, reporter to
 	return result, nil
 }
 
-func (shell *shellTool) execute(ctx context.Context, argv []string, workdir relativePath) (shellContent, string, error) {
-	workspace, directory, command, stdout, stderr, err := shell.prepareCommand(ctx, argv, workdir)
+func (shell *shellTool) execute(
+	ctx context.Context,
+	argv []string,
+	workdir relativePath,
+	lease *executionLease,
+) (shellContent, string, error) {
+	workspace, directory, spec, stdout, stderr, err := shell.prepareProcess(ctx, argv, workdir)
 	if err != nil {
 		return shellContent{}, "", err
 	}
 	defer closeBestEffort(workspace)
 	defer closeBestEffort(directory)
-	outcome := shell.run(ctx, command, shell.config.CommandTimeout)
+	outcome := shell.runProcess(ctx, spec, lease)
 	content := capturedShellContent(workdir, stdout, stderr, outcome)
 	problem, err := classifyProcessOutcome(outcome)
 	if err != nil {
@@ -145,44 +179,82 @@ func (shell *shellTool) execute(ctx context.Context, argv []string, workdir rela
 	return content, problem, nil
 }
 
-func (shell *shellTool) prepareCommand(
+func (shell *shellTool) prepareProcess(
 	ctx context.Context,
 	argv []string,
 	workdir relativePath,
-) (*os.Root, *os.Root, *exec.Cmd, *boundedCapture, *boundedCapture, error) {
+) (*os.Root, *os.Root, process.Spec, *boundedCapture, *boundedCapture, error) {
 	workspace, err := openWorktree(shell.config.Root)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, process.Spec{}, nil, nil, err
 	}
 	if pathErr := rejectSymlinkComponents(workspace, workdir); pathErr != nil {
 		closeBestEffort(workspace)
-		return nil, nil, nil, nil, nil, pathErr
+		return nil, nil, process.Spec{}, nil, nil, pathErr
 	}
 	directory, err := workspace.OpenRoot(workdir.native)
 	if err != nil {
 		closeBestEffort(workspace)
-		return nil, nil, nil, nil, nil,
+		return nil, nil, process.Spec{}, nil, nil,
 			executionFailure("workdir_unavailable", "command workdir is unavailable or escapes the configured worktree")
 	}
 	info, err := directory.Stat(".")
 	if err != nil || !info.IsDir() {
 		closeBestEffort(directory)
 		closeBestEffort(workspace)
-		return nil, nil, nil, nil, nil, executionFailure("workdir_unavailable", "command workdir is not a directory")
+		return nil, nil, process.Spec{}, nil, nil, executionFailure("workdir_unavailable", "command workdir is not a directory")
 	}
 	stdout, stderr := newCapturePair(shell.config.MaxOutputBytes)
-	// #nosec G204 -- argv is deliberately executed without a shell under an explicit process capability.
-	command := exec.CommandContext(context.WithoutCancel(ctx), argv[0], argv[1:]...)
-	command.Dir = directory.Name()
-	command.Env = selectedEnvironment(shell.config.EnvironmentAllowlist)
-	command.Stdout = stdout
-	command.Stderr = stderr
+	environment := selectedEnvironment(shell.config.EnvironmentAllowlist)
+	workingDirectory := filepath.Join(shell.config.Root, workdir.native)
+	lookup, err := process.NewLookup(argv[0], workingDirectory, environment)
+	if err != nil {
+		closeBestEffort(directory)
+		closeBestEffort(workspace)
+		return nil, nil, process.Spec{}, nil, nil, executionUncertainty{
+			message: "command executable lookup could not be prepared", cause: err,
+			state: tool.ExecutionDefinitive,
+		}
+	}
+	resolved, err := shell.resolver.Resolve(ctx, lookup)
+	if err != nil {
+		closeBestEffort(directory)
+		closeBestEffort(workspace)
+		return nil, nil, process.Spec{}, nil, nil, resolutionUncertainty(ctx, err)
+	}
+	spec, err := process.NewSpec(process.Config{
+		Executable: resolved, Arguments: argv[1:], WorkingDirectory: workingDirectory,
+		Environment: environment, Stdin: strings.NewReader(""), Stdout: stdout, Stderr: stderr,
+		Capabilities: shell.definition.Capabilities(),
+	})
+	if err != nil {
+		closeBestEffort(directory)
+		closeBestEffort(workspace)
+		return nil, nil, process.Spec{}, nil, nil, executionUncertainty{
+			message: "resolved command executable is invalid", cause: err,
+			state: tool.ExecutionDefinitive,
+		}
+	}
 	if pathErr := rejectSymlinkComponents(workspace, workdir); pathErr != nil {
 		closeBestEffort(directory)
 		closeBestEffort(workspace)
-		return nil, nil, nil, nil, nil, pathErr
+		return nil, nil, process.Spec{}, nil, nil, pathErr
 	}
-	return workspace, directory, command, stdout, stderr, nil
+	return workspace, directory, spec, stdout, stderr, nil
+}
+
+func resolutionUncertainty(ctx context.Context, err error) executionUncertainty {
+	wrapped := process.NewFailure(process.OperationResolve, err)
+	if ctx != nil && ctx.Err() != nil {
+		return executionUncertainty{
+			message: "command executable resolution was cancelled", cause: ctx.Err(),
+			preserveContext: true, state: tool.ExecutionDefinitive,
+		}
+	}
+	return executionUncertainty{
+		message: "command executable could not be resolved", cause: wrapped,
+		state: tool.ExecutionDefinitive,
+	}
 }
 
 func capturedShellContent(
@@ -193,12 +265,14 @@ func capturedShellContent(
 	stdoutContent, stdoutBytes, truncated := stdout.snapshot()
 	stderrContent, stderrBytes, stderrTruncated := stderr.snapshot()
 	content := shellContent{
-		OK:      outcome.waitErr == nil && outcome.contextErr == nil && !outcome.timedOut && outcome.stopErr == nil,
-		Workdir: workdir.display, ExitCode: exitCode(outcome.waitErr),
+		OK: outcome.hasResult && outcome.result.Successful() && outcome.resultErr == nil &&
+			outcome.launchErr == nil && outcome.contextErr == nil && !outcome.timedOut &&
+			outcome.controlErr == nil && outcome.waitErr == nil,
+		Workdir: workdir.display, ExitCode: outcomeExitCode(outcome),
 		Stdout: string(stdoutContent), Stderr: string(stderrContent), Encoding: "utf-8",
 		StdoutBytes: stdoutBytes, StderrBytes: stderrBytes,
 		OutputTruncated: truncated || stderrTruncated, TimedOut: outcome.timedOut,
-		ManagedCleanupCompleted: outcome.stopErr == nil,
+		ManagedCleanupCompleted: outcome.started && outcome.waitErr == nil,
 	}
 	if !utf8.Valid(stdoutContent) || !utf8.Valid(stderrContent) {
 		content.Encoding = "base64"
@@ -209,7 +283,7 @@ func capturedShellContent(
 }
 
 func classifyProcessOutcome(outcome processOutcome) (string, error) {
-	managedCleanupCompleted := outcome.stopErr == nil
+	managedCleanupCompleted := !outcome.started || outcome.waitErr == nil
 	if outcome.contextErr != nil {
 		message := "command execution was cancelled"
 		if errors.Is(outcome.contextErr, context.DeadlineExceeded) {
@@ -226,25 +300,45 @@ func classifyProcessOutcome(outcome processOutcome) (string, error) {
 		if !managedCleanupCompleted {
 			return "", executionUncertainty{
 				message: "command timed out and managed launcher cleanup did not complete",
-				cause:   outcome.stopErr,
+				cause:   outcome.waitErr, state: tool.ExecutionUncertain,
 			}
 		}
 		return "command exceeded the configured timeout", nil
 	}
-	if !managedCleanupCompleted {
+	if outcome.launchErr != nil {
 		if outcome.started {
 			return "", executionUncertainty{
-				message: "command managed launcher cleanup did not complete",
-				cause:   outcome.stopErr,
+				message: "command launch was only partially observed",
+				cause:   outcome.launchErr, state: tool.ExecutionUncertain,
 			}
 		}
-		return "command could not be started and launcher cleanup failed", nil
+		return "command could not be started", nil
 	}
-	if outcome.waitErr != nil {
-		if exitError, ok := errors.AsType[*exec.ExitError](outcome.waitErr); ok {
-			return fmt.Sprintf("command exited with status %d", exitError.ExitCode()), nil
+	if outcome.resultErr != nil {
+		return "", executionUncertainty{
+			message: "command result could not be observed", cause: outcome.resultErr,
+			state: tool.ExecutionUncertain,
 		}
-		return "", executionFailure("start_failed", "command could not be started or observed")
+	}
+	if !managedCleanupCompleted {
+		return "", executionUncertainty{
+			message: "command process ownership could not be safely released",
+			cause:   outcome.waitErr, state: tool.ExecutionUncertain,
+		}
+	}
+	if outcome.controlErr != nil {
+		return "", executionUncertainty{
+			message: "command process control did not complete cleanly",
+			cause:   outcome.controlErr, state: tool.ExecutionUncertain,
+		}
+	}
+	if !outcome.hasResult {
+		return "", executionUncertainty{
+			message: "command outcome could not be observed", state: tool.ExecutionUncertain,
+		}
+	}
+	if !outcome.result.Successful() {
+		return formatProcessProblem(outcome), nil
 	}
 	return "", nil
 }
@@ -295,14 +389,15 @@ func selectedEnvironment(allowlist []string) []string {
 	return result
 }
 
-func exitCode(err error) int {
-	if err == nil {
-		return 0
+func outcomeExitCode(outcome processOutcome) int64 {
+	if !outcome.hasResult {
+		return -1
 	}
-	if exitError, ok := errors.AsType[*exec.ExitError](err); ok {
-		return exitError.ExitCode()
+	code, present := outcome.result.ExitCode()
+	if !present {
+		return -1
 	}
-	return -1
+	return code
 }
 
 func encodeShellResult(callID tool.CallID, content shellContent, problem string) (tool.Result, error) {

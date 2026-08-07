@@ -7,12 +7,14 @@ github.com/spice-framework/spice/annotation/sdk/starter
 github.com/spice-framework/spice/config
 github.com/spice-framework/spice/conversion
 github.com/spice-framework/spice/expression
+github.com/spice-framework/spice/lifecycle
 github.com/spice-framework/spice/security
 github.com/spice-framework/spice/starter
 github.com/spice-framework/spice/validation
 github.com/spice-framework/spice/web
-# github.com/spice-framework/spice-agent v0.0.0-20260806225954-af79fc7fe4ad
+# github.com/spice-framework/spice-agent v0.0.0-20260807143951-5d2fd63a4768
 ## explicit; go 1.26.0
+github.com/spice-framework/spice-agent/process
 github.com/spice-framework/spice-agent/stage
 github.com/spice-framework/spice-agent/tool
 # github.com/spice-framework/toolchain v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6

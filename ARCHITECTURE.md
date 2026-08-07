@@ -25,17 +25,28 @@ second mutation. Same-digest replacement is a successful no-op, preventing
 inode/metadata churn from defeating this contract. This does not turn a
 durability-uncertain result into a safe automatic retry decision.
 
-Shell executes discrete argv without a shell. Its initial working directory is
-opened through `os.Root`, symbolic-link components are rejected and revalidated,
-and only application-allowlisted host environment variables are inherited.
-After process start, the child has the operating-system user's full authority;
-it is not confined to the worktree. Unix process groups and Windows kill-on-
-close Job Objects provide bounded cleanup for the managed launcher and ordinary
-descendants. They are not a containment boundary: a process may deliberately
-detach from a Unix group, and a Windows child created before Job Object
-attachment is outside that job. `managed_cleanup_completed` therefore means
-the requested launcher cleanup and wait completed without error, not that every
-possible descendant was terminated. Output and post-force waiting are bounded.
+Shell executes discrete argv without a command shell. Its initial working
+directory is opened through `os.Root`, symbolic-link components are rejected
+and revalidated, and only application-allowlisted host environment variables
+are inherited. The tool passes an immutable `process.Lookup` to an injected
+resolver, validates the resulting absolute canonical path in an immutable
+`process.Spec`, and starts it through an injected `process.Launcher`. This
+module owns neither `os/exec` nor platform process-tree code.
+
+Every non-nil `process.Process` returned by `Start` is retained immediately,
+even when `Start` also returns an error. Root `Result` and containment `Wait`
+are independent facts. Ownership is released only after `Wait` succeeds;
+retryable joins are retried non-busily within lifecycle cleanup, while terminal
+join failures are cached and never replayed. Cleanup closes admission, waits
+for in-flight executions, is concurrency-safe and idempotent, and returns
+failure when ownership cannot be proven safe to release. The generated Spice
+application owns that cleanup. `managed_cleanup_completed` reports only a
+successful typed join by the injected platform implementation.
+
+After process start, the child has the operating-system user's full authority
+and is not confined to the worktree. Platform-specific containment guarantees
+belong to the application-provided launcher and must be documented there.
+Output, control calls, ownership count, and join waiting are bounded.
 
 The module may depend on `spice-agent` after its tool contract is tagged. It
 must not own an agent loop, model provider, daemon transport, service locator,
@@ -53,5 +64,7 @@ Expected validation and operating-system failures are terminal model-visible
 results. Cooperative cancellation and host/reporting failures are direct,
 bounded, call-correlated `*tool.ExecutionError` values with a zero result.
 Read/replace pre-commit cancellation is definitive; shell cancellation is
-uncertain after process start and never replayable. Wrapped context identity is
+uncertain after process start and never replayable. Process results use the
+portable exited/signaled/unknown outcome contract; raw platform status and
+paths never enter tool diagnostics. Wrapped context identity is
 preserved for `errors.Is` without exposing unbounded lower-level diagnostics.

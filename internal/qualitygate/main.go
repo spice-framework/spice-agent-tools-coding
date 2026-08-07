@@ -28,7 +28,7 @@ const (
 	minimumCoverage  = 85.0
 	coreVersion      = "v0.1.0-preview.1.0.20260806200749-524424a04df0"
 	toolchainVersion = "v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6"
-	agentVersion     = "v0.0.0-20260806225954-af79fc7fe4ad"
+	agentVersion     = "v0.0.0-20260807143951-5d2fd63a4768"
 )
 
 func main() {

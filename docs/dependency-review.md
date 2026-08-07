@@ -5,22 +5,22 @@
 The coding-tools product remains standard-library-first. Spice core is pinned
 at `v0.1.0-preview.1.0.20260806200749-524424a04df0`, and the toolchain is pinned
 at `v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6`. Spice Agent is pinned at
-`v0.0.0-20260806225954-af79fc7fe4ad` for its public immutable tool contract,
-including explicit effect, replay-safety, fingerprint, and execution-failure
-semantics.
+`v0.0.0-20260807143951-5d2fd63a4768` for its public immutable tool and process
+contracts, including executable lookup, launch ownership, portable outcomes,
+effect, replay-safety, fingerprint, and execution-failure semantics.
 
 `golang.org/x/sys/windows` v0.47.0 is the sole non-framework
-runtime package and is compiled only on Windows for Job Object ownership and
-typed status classification around root-contained atomic replacement.
+runtime package and is compiled only on Windows for typed status classification
+around root-contained atomic replacement. Process containment is supplied by
+the consuming application's injected launcher, not this module.
 
 ## Maintenance and license
 
 Filesystem, process, context, hashing, and atomic-file behavior use Go's
 supported standard library under its BSD-style license. `x/sys` is maintained
 by the Go project, uses a BSD-3-Clause license, follows the Go vulnerability and
-release process, and exposes the Windows Job Object APIs missing from the
-standard library. Version 0.47.0 is checksum-pinned and reviewed as a direct
-Windows dependency.
+release process. Version 0.47.0 is checksum-pinned and reviewed as a direct
+Windows dependency for its stable error constants.
 
 ## Security and ownership
 
@@ -46,11 +46,11 @@ Windows dependency.
   every attempt repeats the digest and regular non-symbolic-link checks. A real
   ACL denial exhausts to `replace_failed`; retryability does not assert that an
   error was transient.
-- Windows Job Objects and Unix process groups provide bounded cleanup for the
-  managed launcher and ordinary descendants. Deliberately detached Unix
-  processes and Windows children created before Job Object attachment may
-  escape; these primitives are not a sandbox. Incomplete launcher cleanup is
-  returned explicitly as an uncertain, never-replayable failure.
+- The application injects the public executable resolver and launcher. This
+  module has no `os/exec` or platform process-tree implementation. Every
+  returned process is retained immediately and released only after typed
+  `Wait` success. Incomplete ownership cleanup is an uncertain,
+  never-replayable failure.
 
 ## Observability
 

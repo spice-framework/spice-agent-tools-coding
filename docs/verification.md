@@ -31,7 +31,9 @@ acknowledgement-loss replay, commit-point cancellation, definition fingerprints,
 strict argv/workdir/environment policy, output truncation, caller cancellation
 and deadlines, configured timeouts, uncertain managed-process cleanup,
 dispatcher correlation, sanitized failure chains, fallback DI, and concurrency.
-Windows uses a real Job Object; Unix uses a real process group. A platform-
-specific detached-child fixture proves those mechanisms are cleanup aids rather
-than containment and prevents `managed_cleanup_completed` from being described
-as whole-tree termination.
+Resolver/launcher contract fixtures prove immutable lookup/spec construction,
+typed exit outcomes, partial-start ownership, Execute/Cleanup overlap,
+retryable and terminal joins, cancellation, and idempotent cleanup. An
+architecture test rejects `os/exec`, syscall launch code, and parallel platform
+launcher mechanisms from product source. Real process containment acceptance
+belongs to the distribution's injected platform implementation.
