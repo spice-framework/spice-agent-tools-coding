@@ -1,5 +1,7 @@
 # Spice Agent Coding Tools
 
+Unified documentation: [spiceframework.dev/agent/tools/coding](https://spiceframework.dev/agent/tools/coding/).
+
 `spice-agent-tools-coding` provides the opt-in read, atomic replace/write, and
 shell tools for Spice Agent. It is standard-library-first, instance-owned, and
 designed for generated Spice dependency injection.
