@@ -26,6 +26,6 @@ permissions:
 
 jobs:
   documentation:
-    uses: spice-framework/.github/.github/workflows/docs-source.yml@10708a97229539acd7be60378977b0506dd67d76
+    uses: spice-framework/.github/.github/workflows/docs-source.yml@db02296c81dda89a6a3bc356834ba247835b9dae
     with:
       docs_commit: 8cf89e57e01b67498e66eb262df872a537b6abe6
