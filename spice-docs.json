@@ -1,0 +1,51 @@
+{
+  "$schema": "https://spiceframework.dev/schemas/spice-docs.schema.json",
+  "schema": 1,
+  "product": {
+    "id": "coding-tools",
+    "title": "Coding tools",
+    "family": "agent-extension",
+    "summary": "Spice Agent coding tools with deterministic replay, bounded filesystem authority, and explicit security contracts.",
+    "maturity": "experimental",
+    "audience": [
+      "application-developer",
+      "extension-author",
+      "operator"
+    ]
+  },
+  "content": [
+    {
+      "source": "README.md",
+      "route": "index",
+      "kind": "how-to",
+      "order": 0,
+      "search": true
+    },
+    {
+      "source": "ARCHITECTURE.md",
+      "route": "architecture",
+      "kind": "concept",
+      "order": 10,
+      "search": true
+    },
+    {
+      "source": "docs/**/*.md",
+      "routeFrom": "docs",
+      "order": 20,
+      "search": true
+    }
+  ],
+  "snippets": [
+    {
+      "root": ".",
+      "include": [
+        "**/*.go"
+      ],
+      "exclude": [
+        "vendor/**",
+        "internal/spicegen/**",
+        ".generated/**"
+      ]
+    }
+  ]
+}
