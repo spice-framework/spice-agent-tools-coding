@@ -21,6 +21,32 @@ func TestNetworkAllowedOnlyForBootstrap(t *testing.T) {
 	}
 }
 
+func TestRepositoryPortabilityRequiresLFAndExplicitToolBootstrap(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGateFile(t, root, ".gitattributes", "* text=auto eol=lf\n*.pb -text\n*.png -text\n")
+	writeGateFile(t, root, ".github/workflows/ci.yml", `steps:
+  - run: go run ./internal/qualitygate -mode=tools-bootstrap
+  - run: go run ./internal/qualitygate -mode=verify
+`)
+	if err := checkRepositoryPortability(root); err != nil {
+		t.Fatal(err)
+	}
+
+	writeGateFile(t, root, ".gitattributes", "* text=auto\n")
+	if err := checkRepositoryPortability(root); err == nil || !strings.Contains(err.Error(), ".gitattributes") {
+		t.Fatalf("invalid attributes error = %v", err)
+	}
+
+	writeGateFile(t, root, ".gitattributes", "* text=auto eol=lf\n*.pb -text\n*.png -text\n")
+	writeGateFile(t, root, ".github/workflows/ci.yml", `steps:
+  - run: go run ./internal/qualitygate -mode=verify
+`)
+	if err := checkRepositoryPortability(root); err == nil || !strings.Contains(err.Error(), "bootstrap") {
+		t.Fatalf("missing bootstrap error = %v", err)
+	}
+}
+
 func TestExactGoExecutable(t *testing.T) {
 	t.Parallel()
 	if goExecutableName("windows") != "go.exe" || goExecutableName("linux") != "go" {
@@ -243,6 +269,11 @@ func TestTreeDigests(t *testing.T) {
 func TestCheckContracts(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
+	writeGateFile(t, root, ".gitattributes", "* text=auto eol=lf\n*.pb -text\n*.png -text\n")
+	writeGateFile(t, root, ".github/workflows/ci.yml", `steps:
+  - run: go run ./internal/qualitygate -mode=tools-bootstrap
+  - run: go run ./internal/qualitygate -mode=verify
+`)
 	module := "require (\n" +
 		"github.com/spice-framework/spice " + coreVersion + "\n" +
 		"github.com/spice-framework/spice-agent " + agentVersion + "\n" +

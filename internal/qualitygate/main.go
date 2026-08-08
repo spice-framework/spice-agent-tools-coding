@@ -192,6 +192,9 @@ func checkContracts(root string) error {
 	if err := checkReleaseMetadata(root); err != nil {
 		return err
 	}
+	if err := checkRepositoryPortability(root); err != nil {
+		return err
+	}
 	module, err := os.ReadFile(filepath.Join(root, "go.mod")) // #nosec G304 -- repository-owned fixed path.
 	if err != nil {
 		return fmt.Errorf("read go.mod: %w", err)
@@ -203,6 +206,28 @@ func checkContracts(root string) error {
 		return err
 	}
 	return checkCompatibility(root)
+}
+
+func checkRepositoryPortability(root string) error {
+	attributes, err := os.ReadFile(filepath.Join(root, ".gitattributes")) // #nosec G304 -- repository-owned fixed path.
+	if err != nil {
+		return fmt.Errorf("read .gitattributes: %w", err)
+	}
+	if string(attributes) != "* text=auto eol=lf\n*.pb -text\n*.png -text\n" {
+		return errors.New(".gitattributes must enforce LF text and preserve binary protocol/image files")
+	}
+
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml")) // #nosec G304 -- repository-owned fixed path.
+	if err != nil {
+		return fmt.Errorf("read CI workflow: %w", err)
+	}
+	text := strings.ReplaceAll(string(workflow), "\r\n", "\n")
+	bootstrap := strings.Index(text, "go run ./internal/qualitygate -mode=tools-bootstrap")
+	verify := strings.Index(text, "go run ./internal/qualitygate -mode=verify")
+	if bootstrap < 0 || verify <= bootstrap {
+		return errors.New("CI quality jobs must bootstrap pinned tools before offline verification")
+	}
+	return nil
 }
 
 func checkModuleSelections(module []byte) error {

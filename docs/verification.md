@@ -25,6 +25,10 @@ The verifier is repository-owned Go and is cross-platform. It never rewrites
 product source. `make fmt` is the only formatting target that mutates Go files.
 `make fast`, `make check`, and `make verify` force `GOPROXY=off`; a missing cache
 entry fails with an actionable prompt to run the explicit bootstrap.
+The hosted repository-quality job performs that explicit bootstrap before its
+offline verification step. Repository text is checked out as LF on every
+platform so `go mod tidy -diff` observes identical module bytes on Windows,
+Linux, and macOS; protocol and image artifacts remain binary.
 Product tests exercise traversal and symlink escape, paging and encoded payload
 bounds, create/replace/stale/race behavior, committed durability uncertainty,
 acknowledgement-loss replay, commit-point cancellation, definition fingerprints,
