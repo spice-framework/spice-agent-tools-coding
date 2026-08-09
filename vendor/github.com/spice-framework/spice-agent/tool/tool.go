@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -519,6 +520,9 @@ func validateIdentity(label, value string) error {
 	if value == "" || value != strings.TrimSpace(value) {
 		return fmt.Errorf("%s must be non-empty without surrounding whitespace", label)
 	}
+	if !utf8.ValidString(value) || strings.ContainsAny(value, "\x00\r\n\t") {
+		return fmt.Errorf("%s contains invalid text", label)
+	}
 	if len(value) > maxIdentityBytes {
 		return fmt.Errorf("%s exceeds %d bytes", label, maxIdentityBytes)
 	}
@@ -526,7 +530,7 @@ func validateIdentity(label, value string) error {
 }
 
 func validateJSON(label string, value json.RawMessage) error {
-	if len(value) == 0 || !json.Valid(value) {
+	if len(value) == 0 || !utf8.Valid(value) || !json.Valid(value) {
 		return fmt.Errorf("%s must be valid JSON", label)
 	}
 	if len(value) > MaximumPayloadBytes {

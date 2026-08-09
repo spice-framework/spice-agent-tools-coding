@@ -3,9 +3,9 @@
 ## Decision
 
 The coding-tools product remains standard-library-first. Spice core is pinned
-at `v0.1.0-preview.1.0.20260806200749-524424a04df0`, and the toolchain is pinned
+at `v0.1.0-preview.2`, and the toolchain is pinned
 at `v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6`. Spice Agent is pinned at
-`v0.0.0-20260807143951-5d2fd63a4768` for its public immutable tool and process
+`v0.1.0-preview.4` for its public immutable tool and process
 contracts, including executable lookup, launch ownership, portable outcomes,
 effect, replay-safety, fingerprint, and execution-failure semantics.
 
@@ -67,3 +67,6 @@ excluded from general diagnostics.
 The Spice toolchain is authorized through the standard Go `tool` directive and
 normal module selection. Committed vendor data makes compiler and product
 verification available offline. No custom plugin or dependency registry exists.
+The public Spice and Spice Agent tags are checksum-verified through the Go
+module proxy and checksum database; the toolchain remains at the separately
+reviewed exact pseudo-version used by this preview line.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -49,14 +50,100 @@ func TestRepositoryPortabilityRequiresLFAndExplicitToolBootstrap(t *testing.T) {
 
 func TestReleaseWorkflowRequiresExactKeylessBoundary(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
-	writeGateFile(t, root, ".github/workflows/release.yml", validReleaseWorkflow())
-	if err := checkReleaseWorkflow(root); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		workflow string
+		wantErr  string
+		omit     bool
+	}{
+		{name: "valid", workflow: validReleaseWorkflow()},
+		{name: "missing", wantErr: "read release workflow", omit: true},
+		{
+			name:     "wrong reusable pin",
+			workflow: strings.Replace(validReleaseWorkflow(), releaseWorkflowCommit, strings.Repeat("0", 40), 1),
+			wantErr:  "uses:",
+		},
+		{
+			name:     "superseded caller",
+			workflow: strings.ReplaceAll(validReleaseWorkflow(), releaseWorkflowCommit, "26de6f4b78a64eedb21e15a2ffe8aa3fd579ef16"),
+			wantErr:  "uses:",
+		},
+		{
+			name: "wrong attested workflow pin",
+			workflow: strings.Replace(
+				validReleaseWorkflow(),
+				"workflow_commit: "+releaseWorkflowCommit,
+				"workflow_commit: "+strings.Repeat("0", 40),
+				1,
+			),
+			wantErr: "workflow_commit:",
+		},
+		{
+			name:     "wrong module",
+			workflow: strings.Replace(validReleaseWorkflow(), modulePath, "example.com/wrong", 1),
+			wantErr:  "module:",
+		},
+		{
+			name:     "legacy workflow",
+			workflow: strings.Replace(validReleaseWorkflow(), "go-module-release.yml", "library-release.yml", 1),
+			wantErr:  "go-module-release.yml",
+		},
+		{
+			name:     "inherited secrets",
+			workflow: validReleaseWorkflow() + "    secrets: inherit\n",
+			wantErr:  "secrets:",
+		},
+		{
+			name:     "named signing secret",
+			workflow: validReleaseWorkflow() + "    secrets:\n      SPICE_LIBRARY_RELEASE_SIGNING_KEY: value\n",
+			wantErr:  "secrets:",
+		},
+		{
+			name: "extra permission",
+			workflow: strings.Replace(
+				validReleaseWorkflow(),
+				"      contents: write\n",
+				"      contents: write\n      packages: write\n",
+				1,
+			),
+			wantErr: "permission ceiling",
+		},
+		{
+			name:     "missing permission",
+			workflow: strings.Replace(validReleaseWorkflow(), "      attestations: write\n", "", 1),
+			wantErr:  "attestations: write",
+		},
+		{
+			name:     "extra permission block",
+			workflow: validReleaseWorkflow() + "permissions: read-all\n",
+			wantErr:  "permission blocks",
+		},
+		{
+			name:     "extra job",
+			workflow: validReleaseWorkflow() + "  publish-again:\n    uses: example.invalid/workflow.yml@deadbeef\n",
+			wantErr:  "only the release job",
+		},
+		{
+			name:     "local steps",
+			workflow: validReleaseWorkflow() + "    steps:\n      - run: echo unsafe\n",
+			wantErr:  "steps:",
+		},
 	}
-	writeGateFile(t, root, ".github/workflows/release.yml", "secrets: inherit\n")
-	if err := checkReleaseWorkflow(root); err == nil {
-		t.Fatal("unsafe release workflow passed")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			if !test.omit {
+				writeGateFile(t, root, ".github/workflows/release.yml", test.workflow)
+			}
+			err := checkReleaseWorkflow(root)
+			if test.wantErr == "" && err != nil {
+				t.Fatal(err)
+			}
+			if test.wantErr != "" && (err == nil || !strings.Contains(err.Error(), test.wantErr)) {
+				t.Fatalf("checkReleaseWorkflow() error = %v, want containing %q", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -312,10 +399,55 @@ func TestCheckContracts(t *testing.T) {
 	}
 }
 
+func TestModuleSelectionsRequireReleasedFrameworkVersions(t *testing.T) {
+	t.Parallel()
+	valid := []byte("require (\n" +
+		"github.com/spice-framework/spice " + coreVersion + "\n" +
+		"github.com/spice-framework/spice-agent " + agentVersion + "\n" +
+		"github.com/spice-framework/toolchain " + toolchainVersion + "\n" +
+		")\ntool github.com/spice-framework/toolchain/cmd/spice\n")
+	if err := checkModuleSelections(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name    string
+		current string
+		stale   string
+	}{
+		{
+			name:    "Spice pseudo-version",
+			current: coreVersion,
+			stale:   "v0.1.0-preview.1.0.20260806200749-524424a04df0",
+		},
+		{
+			name:    "Agent pseudo-version",
+			current: agentVersion,
+			stale:   "v0.0.0-20260807143951-5d2fd63a4768",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			module := bytes.Replace(valid, []byte(test.current), []byte(test.stale), 1)
+			if err := checkModuleSelections(module); err == nil || !strings.Contains(err.Error(), "exact") {
+				t.Fatalf("checkModuleSelections(stale) error = %v", err)
+			}
+		})
+	}
+}
+
 func validReleaseWorkflow() string {
-	return `permissions: {}
+	return `name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+permissions: {}
+
 jobs:
   release:
+    name: Keylessly attest and publish
     permissions:
       contents: write
       id-token: write

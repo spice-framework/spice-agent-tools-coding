@@ -91,3 +91,8 @@ quality targets remain offline; run the complete suite with `make verify`.
 complete local gate. The organization release authority independently binds
 the repository name, module path, exact preview version, required module graph,
 commit, and tag before it creates any artifact or release.
+The current preview graph selects Spice `v0.1.0-preview.2`, Spice Agent
+`v0.1.0-preview.4`, and the unchanged exact Spice toolchain pseudo-version.
+The release caller is a single step-free reusable-workflow job pinned to the
+reviewed organization authority; repository verification rejects extra jobs,
+permissions, local steps, inherited secrets, or mismatched attestation pins.

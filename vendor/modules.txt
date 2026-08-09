@@ -1,4 +1,4 @@
-# github.com/spice-framework/spice v0.1.0-preview.1.0.20260806200749-524424a04df0
+# github.com/spice-framework/spice v0.1.0-preview.2
 ## explicit; go 1.26.0
 github.com/spice-framework/spice/annotation
 github.com/spice-framework/spice/annotation/sdk
@@ -12,7 +12,7 @@ github.com/spice-framework/spice/security
 github.com/spice-framework/spice/starter
 github.com/spice-framework/spice/validation
 github.com/spice-framework/spice/web
-# github.com/spice-framework/spice-agent v0.0.0-20260807143951-5d2fd63a4768
+# github.com/spice-framework/spice-agent v0.1.0-preview.4
 ## explicit; go 1.26.0
 github.com/spice-framework/spice-agent/process
 github.com/spice-framework/spice-agent/stage

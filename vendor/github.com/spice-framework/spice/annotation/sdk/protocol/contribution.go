@@ -110,6 +110,8 @@ func foundationContributionPayload(
 		return value.BeanMetadata, true
 	case sdk.ContributionConfiguration:
 		return value.Configuration, true
+	case sdk.ContributionEnum:
+		return value.Enum, true
 	case sdk.ContributionController:
 		return value.Controller, true
 	case sdk.ContributionRoute:
@@ -146,6 +148,10 @@ func integrationContributionPayload(
 		return value.Cache, true
 	case sdk.ContributionAuthorization:
 		return value.Authorization, true
+	case sdk.ContributionRetry:
+		return value.Retry, true
+	case sdk.ContributionObservation:
+		return value.Observation, true
 	case sdk.ContributionGeneratedFile:
 		return value.GeneratedFile, true
 	default:
@@ -192,6 +198,9 @@ func foundationContributionDestination(
 	case sdk.ContributionConfiguration:
 		value.Configuration = &sdk.ConfigurationContribution{}
 		return value, value.Configuration, true
+	case sdk.ContributionEnum:
+		value.Enum = &sdk.EnumContribution{}
+		return value, value.Enum, true
 	case sdk.ContributionController:
 		value.Controller = &sdk.ControllerContribution{}
 		return value, value.Controller, true
@@ -242,6 +251,12 @@ func integrationContributionDestination(
 	case sdk.ContributionAuthorization:
 		value.Authorization = &sdk.AuthorizationContribution{}
 		return value, value.Authorization, true
+	case sdk.ContributionRetry:
+		value.Retry = &sdk.RetryContribution{}
+		return value, value.Retry, true
+	case sdk.ContributionObservation:
+		value.Observation = &sdk.ObservationContribution{}
+		return value, value.Observation, true
 	case sdk.ContributionGeneratedFile:
 		value.GeneratedFile = &sdk.GeneratedFileContribution{}
 		return value, value.GeneratedFile, true

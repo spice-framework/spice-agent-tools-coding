@@ -6,6 +6,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"time"
 )
 
 // ContributionKind identifies one typed compiler-IR input returned by an
@@ -19,6 +20,7 @@ const (
 	ContributionProvider       ContributionKind = "provider"
 	ContributionBeanMetadata   ContributionKind = "bean-metadata"
 	ContributionConfiguration  ContributionKind = "configuration"
+	ContributionEnum           ContributionKind = "enum"
 	ContributionController     ContributionKind = "controller"
 	ContributionRoute          ContributionKind = "route"
 	ContributionModule         ContributionKind = "module"
@@ -32,6 +34,8 @@ const (
 	ContributionEventListener  ContributionKind = "event-listener"
 	ContributionCache          ContributionKind = "cache"
 	ContributionAuthorization  ContributionKind = "authorization"
+	ContributionRetry          ContributionKind = "retry"
+	ContributionObservation    ContributionKind = "observation"
 	ContributionGeneratedFile  ContributionKind = "generated-file"
 )
 
@@ -86,10 +90,18 @@ type BeanMetadataContribution struct {
 	Scope      BeanScope `json:"scope,omitempty"`
 }
 
-// ConfigurationContribution marks one typed configuration declaration.
+// ConfigurationContribution marks one typed configuration declaration. Prefix
+// is empty or a dot-separated sequence of lowercase identifier segments. Each
+// segment may contain digits after its first letter and single interior
+// hyphens, for example "agent.runtime-plugin".
 type ConfigurationContribution struct {
 	Prefix string `json:"prefix,omitempty"`
 }
+
+// EnumContribution marks one named scalar type whose same-file constants form
+// its complete legal value set. The compiler derives members and underlying
+// values from the typed Go program.
+type EnumContribution struct{}
 
 // ControllerContribution marks one HTTP controller declaration.
 type ControllerContribution struct {
@@ -186,6 +198,23 @@ type AuthorizationContribution struct {
 	Expression    string   `json:"expression,omitempty"`
 }
 
+// RetryContribution describes one bounded generated method retry policy.
+// Classifier is an optional exported package function with signature
+// func(error) bool; an empty classifier selects retry.Transient.
+type RetryContribution struct {
+	MaxAttempts    int64  `json:"max_attempts"`
+	InitialBackoff string `json:"initial_backoff,omitempty"`
+	MaxBackoff     string `json:"max_backoff,omitempty"`
+	Multiplier     int64  `json:"multiplier,omitempty"`
+	Classifier     string `json:"classifier,omitempty"`
+}
+
+// ObservationContribution describes one generated method observation. Name
+// is optional; an empty name selects the compiler-owned stable method ID.
+type ObservationContribution struct {
+	Name string `json:"name,omitempty"`
+}
+
 // GeneratedFileContribution requests one guarded generated file. The compiler
 // still owns path safety, generated markers, ownership, and filesystem apply.
 type GeneratedFileContribution struct {
@@ -203,6 +232,7 @@ type Contribution struct {
 	Provider       *ProviderContribution
 	BeanMetadata   *BeanMetadataContribution
 	Configuration  *ConfigurationContribution
+	Enum           *EnumContribution
 	Controller     *ControllerContribution
 	Route          *RouteContribution
 	Module         *ModuleContribution
@@ -216,6 +246,8 @@ type Contribution struct {
 	EventListener  *EventListenerContribution
 	Cache          *CacheContribution
 	Authorization  *AuthorizationContribution
+	Retry          *RetryContribution
+	Observation    *ObservationContribution
 	GeneratedFile  *GeneratedFileContribution
 }
 
@@ -266,6 +298,8 @@ func validateFoundationContribution(
 			"configuration",
 			contribution.Configuration.Prefix,
 		), true
+	case ContributionEnum:
+		return requirePayload(contribution.Enum, "enum"), true
 	case ContributionController:
 		if err := requirePayload(
 			contribution.Controller,
@@ -473,6 +507,19 @@ func validateIntegrationContribution(
 			return err, true
 		}
 		return validateAuthorization(*contribution.Authorization), true
+	case ContributionRetry:
+		if err := requirePayload(contribution.Retry, "retry"); err != nil {
+			return err, true
+		}
+		return validateRetry(*contribution.Retry), true
+	case ContributionObservation:
+		if err := requirePayload(contribution.Observation, "observation"); err != nil {
+			return err, true
+		}
+		if contribution.Observation.Name == "" {
+			return nil, true
+		}
+		return requireTrimmed("observation name", contribution.Observation.Name), true
 	case ContributionGeneratedFile:
 		if err := requirePayload(
 			contribution.GeneratedFile,
@@ -518,6 +565,7 @@ func (contribution Contribution) Clone() Contribution {
 		)
 	}
 	result.Configuration = clonePointer(contribution.Configuration)
+	result.Enum = clonePointer(contribution.Enum)
 	result.Controller = clonePointer(contribution.Controller)
 	result.Route = clonePointer(contribution.Route)
 	result.Module = clonePointer(contribution.Module)
@@ -552,6 +600,8 @@ func (contribution Contribution) Clone() Contribution {
 			contribution.Authorization.AllScopes,
 		)
 	}
+	result.Retry = clonePointer(contribution.Retry)
+	result.Observation = clonePointer(contribution.Observation)
 	result.GeneratedFile = clonePointer(contribution.GeneratedFile)
 	return result
 }
@@ -565,6 +615,7 @@ func (contribution Contribution) payloadCount() int {
 		contribution.Provider != nil,
 		contribution.BeanMetadata != nil,
 		contribution.Configuration != nil,
+		contribution.Enum != nil,
 		contribution.Controller != nil,
 		contribution.Route != nil,
 		contribution.Module != nil,
@@ -578,6 +629,8 @@ func (contribution Contribution) payloadCount() int {
 		contribution.EventListener != nil,
 		contribution.Cache != nil,
 		contribution.Authorization != nil,
+		contribution.Retry != nil,
+		contribution.Observation != nil,
 		contribution.GeneratedFile != nil,
 	} {
 		if present {
@@ -603,6 +656,40 @@ func validateBeanIdentity(name string, aliases []string) error {
 				alias,
 			)
 		}
+	}
+	return nil
+}
+
+func validateRetry(retry RetryContribution) error {
+	if retry.MaxAttempts < 1 || retry.MaxAttempts > 100 {
+		return fmt.Errorf(
+			"annotation retry max attempts %d must be between 1 and 100",
+			retry.MaxAttempts,
+		)
+	}
+	initial, err := time.ParseDuration(retry.InitialBackoff)
+	if err != nil || initial < 0 {
+		return fmt.Errorf(
+			"annotation retry initial backoff %q must be a non-negative duration",
+			retry.InitialBackoff,
+		)
+	}
+	maximum, err := time.ParseDuration(retry.MaxBackoff)
+	if err != nil || maximum < initial {
+		return fmt.Errorf(
+			"annotation retry max backoff %q must be a duration at least %s",
+			retry.MaxBackoff,
+			initial,
+		)
+	}
+	if retry.Multiplier < 2 || retry.Multiplier > 100 {
+		return fmt.Errorf(
+			"annotation retry multiplier %d must be between 2 and 100",
+			retry.Multiplier,
+		)
+	}
+	if retry.Classifier != "" {
+		return requireTrimmed("retry classifier", retry.Classifier)
 	}
 	return nil
 }
@@ -652,15 +739,35 @@ func validateOptionalPrefix(name, value string) error {
 		)
 	}
 	for segment := range strings.SplitSeq(value, ".") {
-		if !validIdentifier(segment) {
+		if !validConfigurationPrefixSegment(segment) {
 			return fmt.Errorf(
-				"annotation %s prefix %q is not dot-separated identifiers",
+				"annotation %s prefix %q must be dot-separated lowercase identifiers with optional single interior hyphens",
 				name,
 				value,
 			)
 		}
 	}
 	return nil
+}
+
+func validConfigurationPrefixSegment(value string) bool {
+	if value == "" || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	previousHyphen := false
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		switch {
+		case character >= 'a' && character <= 'z',
+			character >= '0' && character <= '9':
+			previousHyphen = false
+		case character == '-' && !previousHyphen:
+			previousHyphen = true
+		default:
+			return false
+		}
+	}
+	return !previousHyphen
 }
 
 func validateOptionalRoutePrefix(value string) error {
