@@ -332,15 +332,15 @@ func TestBestEffortCleanupIgnoresCleanupFailures(t *testing.T) {
 	removeBestEffort(workspace, "missing")
 }
 
-func makeCall(t *testing.T, name string, arguments any) tool.Call {
-	t.Helper()
+func makeCall(tb testing.TB, name string, arguments any) tool.Call {
+	tb.Helper()
 	content, err := json.Marshal(arguments)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
-	call, err := tool.NewCall(tool.CallID(t.Name()), name, content)
+	call, err := tool.NewCall(tool.CallID(tb.Name()), name, content)
 	if err != nil {
-		t.Fatal(err)
+		tb.Fatal(err)
 	}
 	return call
 }

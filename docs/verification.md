@@ -41,3 +41,8 @@ retryable and terminal joins, cancellation, and idempotent cleanup. An
 architecture test rejects `os/exec`, syscall launch code, and parallel platform
 launcher mechanisms from product source. Real process containment acceptance
 belongs to the distribution's injected platform implementation.
+
+The provisional offline filesystem and dispatcher benchmarks are documented in
+[`benchmarks.md`](benchmarks.md). They use only test-owned temporary files and
+in-memory process fixtures, and are diagnostic evidence rather than fixed
+quality-gate thresholds.
