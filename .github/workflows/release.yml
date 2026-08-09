@@ -9,11 +9,13 @@ permissions: {}
 
 jobs:
   release:
-    name: Centrally verify, sign, and publish
+    name: Keylessly attest and publish
     permissions:
       contents: write
-    uses: spice-framework/.github/.github/workflows/library-release.yml@9ae80e32f64b29697acd9ebe629468850b4ae9f2
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    uses: spice-framework/.github/.github/workflows/go-module-release.yml@26de6f4b78a64eedb21e15a2ffe8aa3fd579ef16
     with:
       module: github.com/spice-framework/spice-agent-tools-coding
-    secrets:
-      SPICE_LIBRARY_RELEASE_SIGNING_KEY: ${{ secrets.SPICE_LIBRARY_RELEASE_SIGNING_KEY }}
+      workflow_commit: 26de6f4b78a64eedb21e15a2ffe8aa3fd579ef16

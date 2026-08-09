@@ -47,6 +47,19 @@ func TestRepositoryPortabilityRequiresLFAndExplicitToolBootstrap(t *testing.T) {
 	}
 }
 
+func TestReleaseWorkflowRequiresExactKeylessBoundary(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeGateFile(t, root, ".github/workflows/release.yml", validReleaseWorkflow())
+	if err := checkReleaseWorkflow(root); err != nil {
+		t.Fatal(err)
+	}
+	writeGateFile(t, root, ".github/workflows/release.yml", "secrets: inherit\n")
+	if err := checkReleaseWorkflow(root); err == nil {
+		t.Fatal("unsafe release workflow passed")
+	}
+}
+
 func TestExactGoExecutable(t *testing.T) {
 	t.Parallel()
 	if goExecutableName("windows") != "go.exe" || goExecutableName("linux") != "go" {
@@ -274,6 +287,7 @@ func TestCheckContracts(t *testing.T) {
   - run: go run ./internal/qualitygate -mode=tools-bootstrap
   - run: go run ./internal/qualitygate -mode=verify
 `)
+	writeGateFile(t, root, ".github/workflows/release.yml", validReleaseWorkflow())
 	module := "require (\n" +
 		"github.com/spice-framework/spice " + coreVersion + "\n" +
 		"github.com/spice-framework/spice-agent " + agentVersion + "\n" +
@@ -296,6 +310,22 @@ func TestCheckContracts(t *testing.T) {
 	if err := checkContracts(root); err == nil || !strings.Contains(err.Error(), "without a replace") {
 		t.Fatalf("checkContracts() error = %v", err)
 	}
+}
+
+func validReleaseWorkflow() string {
+	return `permissions: {}
+jobs:
+  release:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    uses: spice-framework/.github/.github/workflows/go-module-release.yml@` + releaseWorkflowCommit + `
+    with:
+      module: ` + modulePath + `
+      workflow_commit: ` + releaseWorkflowCommit + `
+`
 }
 
 func writeGateFile(t *testing.T, root, name, content string) {

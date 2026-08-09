@@ -23,12 +23,13 @@ import (
 )
 
 const (
-	modulePath       = "github.com/spice-framework/spice-agent-tools-coding"
-	requiredGo       = "go1.26.5"
-	minimumCoverage  = 85.0
-	coreVersion      = "v0.1.0-preview.1.0.20260806200749-524424a04df0"
-	toolchainVersion = "v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6"
-	agentVersion     = "v0.0.0-20260807143951-5d2fd63a4768"
+	modulePath            = "github.com/spice-framework/spice-agent-tools-coding"
+	requiredGo            = "go1.26.5"
+	minimumCoverage       = 85.0
+	coreVersion           = "v0.1.0-preview.1.0.20260806200749-524424a04df0"
+	toolchainVersion      = "v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6"
+	agentVersion          = "v0.0.0-20260807143951-5d2fd63a4768"
+	releaseWorkflowCommit = "26de6f4b78a64eedb21e15a2ffe8aa3fd579ef16"
 )
 
 func main() {
@@ -192,6 +193,9 @@ func checkContracts(root string) error {
 	if err := checkReleaseMetadata(root); err != nil {
 		return err
 	}
+	if err := checkReleaseWorkflow(root); err != nil {
+		return err
+	}
 	if err := checkRepositoryPortability(root); err != nil {
 		return err
 	}
@@ -206,6 +210,34 @@ func checkContracts(root string) error {
 		return err
 	}
 	return checkCompatibility(root)
+}
+
+func checkReleaseWorkflow(root string) error {
+	content, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "release.yml")) // #nosec G304 -- repository-owned fixed path.
+	if err != nil {
+		return fmt.Errorf("read release workflow: %w", err)
+	}
+	text := strings.ReplaceAll(string(content), "\r\n", "\n")
+	for _, required := range []string{
+		"permissions: {}",
+		"contents: write",
+		"id-token: write",
+		"attestations: write",
+		"artifact-metadata: write",
+		"uses: spice-framework/.github/.github/workflows/go-module-release.yml@" + releaseWorkflowCommit,
+		"module: " + modulePath,
+		"workflow_commit: " + releaseWorkflowCommit,
+	} {
+		if strings.Count(text, required) != 1 {
+			return fmt.Errorf("release workflow must contain exactly one %q", required)
+		}
+	}
+	for _, forbidden := range []string{"library-release.yml", "secrets:", "secrets: inherit", "SPICE_LIBRARY_RELEASE_SIGNING_KEY"} {
+		if strings.Contains(text, forbidden) {
+			return fmt.Errorf("release workflow contains forbidden %q", forbidden)
+		}
+	}
+	return nil
 }
 
 func checkRepositoryPortability(root string) error {
