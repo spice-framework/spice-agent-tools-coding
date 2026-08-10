@@ -20,15 +20,16 @@ outside `testing.B.TempDir`. The injected shell resolver returns a fixed path,
 the launcher is an in-memory fixture, and its only inherited environment value
 is test-owned and fixed.
 
-Run all samples from a clean repository with the committed vendor graph:
+Run all samples through the repository-owned offline gate:
 
 ```text
-GOWORK=off GOPROXY=off go test -mod=vendor -run '^$' -bench '^Benchmark' -benchmem -count=5 .
+make benchmark
 ```
 
-In PowerShell, set `$env:GOWORK = 'off'` and `$env:GOPROXY = 'off'` before the
-same `go test` command. To isolate filesystem variance, select one benchmark
-with `-bench '^BenchmarkAtomicReplaceExecute$'` while retaining `-count=5`.
+The gate selects exactly these four benchmarks, runs five fixed 500-iteration
+samples with `-cpu=1`, records allocations, forces `GOWORK=off`, and disables
+the proxy and checksum database while using the committed vendor graph.
+Missing dependencies therefore fail instead of causing a hidden download.
 
 Results remain provisional diagnostic evidence during pre-1.0 contract stress.
 Record the exact source, Go version, platform, CPU, and filesystem with every
@@ -67,3 +68,6 @@ therefore intentionally filesystem-sensitive. The shell results include
 `os.Root` workdir validation and Agent dispatcher translation but exclude an
 operating-system process launch; real launcher costs belong to the consuming
 distribution's separately benchmarked process implementation.
+
+Future observations use `make benchmark`; the historical table above predates
+the repository-owned command and remains descriptive evidence only.

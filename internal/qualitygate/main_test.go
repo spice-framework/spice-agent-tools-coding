@@ -6,19 +6,37 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestNetworkAllowedOnlyForBootstrap(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []string{"fast", "check", "fmt", "verify", "unknown"} {
+	for _, mode := range []string{"fast", "check", "fmt", "benchmark", "verify", "unknown"} {
 		if networkAllowed(mode) {
 			t.Fatalf("networkAllowed(%q) = true", mode)
 		}
 	}
 	if !networkAllowed("tools-bootstrap") {
 		t.Fatal("networkAllowed(tools-bootstrap) = false")
+	}
+}
+
+func TestBenchmarkArgumentsAreDeterministicAndBounded(t *testing.T) {
+	t.Parallel()
+	want := []string{
+		"test",
+		"-run=^$",
+		"-bench=^Benchmark(ReadExecute|AtomicReplaceExecute|ShellDispatcherBoundedOutput|ShellDispatcherCancellation)$",
+		"-benchmem",
+		"-benchtime=500x",
+		"-count=5",
+		"-cpu=1",
+		".",
+	}
+	if got := benchmarkArguments(); !slices.Equal(got, want) {
+		t.Fatalf("benchmark arguments = %q, want %q", got, want)
 	}
 }
 

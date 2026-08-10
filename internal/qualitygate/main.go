@@ -37,7 +37,7 @@ func main() {
 }
 
 func execute() int {
-	mode := flag.String("mode", "check", "tools-bootstrap, fast, check, fmt, or verify")
+	mode := flag.String("mode", "check", "tools-bootstrap, fast, check, fmt, benchmark, or verify")
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
@@ -69,6 +69,11 @@ func run(ctx context.Context, root, mode string) error {
 		return format(ctx, root, true)
 	case "check":
 		return check(ctx, root)
+	case "benchmark":
+		if err := checkReleaseMetadata(root); err != nil {
+			return err
+		}
+		return benchmarks(ctx, root)
 	case "verify":
 		if err := check(ctx, root); err != nil {
 			return err
@@ -87,6 +92,27 @@ func run(ctx context.Context, root, mode string) error {
 }
 
 func networkAllowed(mode string) bool { return mode == "tools-bootstrap" }
+
+func benchmarks(ctx context.Context, root string) error {
+	environment := map[string]string{
+		"GOFLAGS": "-mod=vendor", "GOPROXY": "off", "GOSUMDB": "off",
+		"GOTOOLCHAIN": "local", "GOWORK": "off",
+	}
+	return command(ctx, root, environment, "go", benchmarkArguments()...)
+}
+
+func benchmarkArguments() []string {
+	return []string{
+		"test",
+		"-run=^$",
+		"-bench=^Benchmark(ReadExecute|AtomicReplaceExecute|ShellDispatcherBoundedOutput|ShellDispatcherCancellation)$",
+		"-benchmem",
+		"-benchtime=500x",
+		"-count=5",
+		"-cpu=1",
+		".",
+	}
+}
 
 type bootstrapRunner func(context.Context, string, ...string) error
 

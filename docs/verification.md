@@ -17,6 +17,8 @@ not an older `go` that may appear first on `PATH`.
 
 - `make fast` checks the exact Go version and runs repository tests.
 - `make check` adds goimports/gofumpt, tidy diff, vet, and shuffled tests.
+- `make benchmark` runs the four adopted deterministic coding-tool benchmarks
+  as five fixed 500-iteration, single-CPU samples with the offline vendor graph.
 - `make verify` adds allowlisted lint, NilAway, gosec, govulncheck, race tests,
   85% product coverage, reproducible vendor comparison, and vendor-offline
   tests/builds.
@@ -43,6 +45,6 @@ launcher mechanisms from product source. Real process containment acceptance
 belongs to the distribution's injected platform implementation.
 
 The provisional offline filesystem and dispatcher benchmarks are documented in
-[`benchmarks.md`](benchmarks.md). They use only test-owned temporary files and
-in-memory process fixtures, and are diagnostic evidence rather than fixed
-quality-gate thresholds.
+[`benchmarks.md`](benchmarks.md). They are produced by the repository-owned
+benchmark gate, use only test-owned temporary files and in-memory process
+fixtures, and remain diagnostic evidence rather than fixed thresholds.
