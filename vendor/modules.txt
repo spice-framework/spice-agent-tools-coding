@@ -12,8 +12,9 @@ github.com/spice-framework/spice/security
 github.com/spice-framework/spice/starter
 github.com/spice-framework/spice/validation
 github.com/spice-framework/spice/web
-# github.com/spice-framework/spice-agent v0.1.0-preview.4
+# github.com/spice-framework/spice-agent v0.1.0-preview.5
 ## explicit; go 1.26.0
+github.com/spice-framework/spice-agent/interaction
 github.com/spice-framework/spice-agent/process
 github.com/spice-framework/spice-agent/stage
 github.com/spice-framework/spice-agent/tool
