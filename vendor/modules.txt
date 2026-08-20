@@ -1,4 +1,4 @@
-# github.com/spice-framework/spice v0.1.0-preview.2
+# github.com/spice-framework/spice v0.1.0-preview.4
 ## explicit; go 1.26.0
 github.com/spice-framework/spice/annotation
 github.com/spice-framework/spice/annotation/sdk
