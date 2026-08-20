@@ -40,7 +40,7 @@ type Field struct {
 	PhysicalPosition token.Position
 }
 
-// Type is one validated @Configuration named struct.
+// Type is one validated @ConfigurationProperties named struct.
 type Type struct {
 	Symbol           load.Symbol
 	SymbolID         string
@@ -106,7 +106,7 @@ func (c Catalog) Diagnostics() []Diagnostic {
 	return append([]Diagnostic(nil), c.diagnostics...)
 }
 
-// Build validates every resolved @Configuration declaration without reloading
+// Build validates every resolved @ConfigurationProperties declaration without reloading
 // packages, reflecting on runtime values, or executing application code.
 func Build(program *load.Program, resolution resolve.Result, modules modulith.Model) Catalog {
 	if program == nil {
@@ -131,7 +131,7 @@ func Build(program *load.Program, resolution resolve.Result, modules modulith.Mo
 				occurrence,
 				"duplicate-annotation",
 				fmt.Sprintf(
-					"@Configuration type %q is declared more than once; first declaration is at %s",
+					"@ConfigurationProperties type %q is declared more than once; first declaration is at %s",
 					occurrence.Name,
 					renderPosition(previous.DisplayPosition),
 				),
@@ -145,7 +145,7 @@ func Build(program *load.Program, resolution resolve.Result, modules modulith.Mo
 			catalog.diagnostics = append(catalog.diagnostics, occurrenceDiagnostic(
 				occurrence,
 				"missing-symbol",
-				fmt.Sprintf("@Configuration target %q has no stable typed symbol in the loaded program", occurrence.Name),
+				fmt.Sprintf("@ConfigurationProperties target %q has no stable typed symbol in the loaded program", occurrence.Name),
 			))
 			continue
 		}
@@ -204,7 +204,7 @@ func analyzeType(
 			occurrence,
 			symbol,
 			"internal",
-			fmt.Sprintf("@Configuration %s lost its validated struct type", symbol.DisplayLabel),
+			fmt.Sprintf("@ConfigurationProperties %s lost its validated struct type", symbol.DisplayLabel),
 		)}
 	}
 	var diagnostics []Diagnostic
@@ -239,39 +239,39 @@ func configurationType(occurrence resolve.Occurrence, symbol load.Symbol) (*type
 	if occurrence.Target != annotation.TargetType || symbol.Kind != load.SymbolType {
 		return nil, &problem{
 			kind:    "invalid-target",
-			message: fmt.Sprintf("@Configuration %s must target a named struct type", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must target a named struct type", label),
 		}
 	}
 	if !token.IsExported(symbol.Name) {
 		return nil, &problem{
 			kind:    "unexported-type",
-			message: fmt.Sprintf("@Configuration %s must be exported so target-scoped generated code can construct it", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must be exported so target-scoped generated code can construct it", label),
 		}
 	}
 	typeName, ok := symbol.Object.(*types.TypeName)
 	if !ok || typeName.IsAlias() {
 		return nil, &problem{
 			kind:    "invalid-type",
-			message: fmt.Sprintf("@Configuration %s must be a defined named struct; aliases are not supported", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must be a defined named struct; aliases are not supported", label),
 		}
 	}
 	named, ok := typeName.Type().(*types.Named)
 	if !ok {
 		return nil, &problem{
 			kind:    "invalid-type",
-			message: fmt.Sprintf("@Configuration %s must be a defined named struct", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must be a defined named struct", label),
 		}
 	}
 	if named.TypeParams() != nil && named.TypeParams().Len() > 0 {
 		return nil, &problem{
 			kind:    "generic",
-			message: fmt.Sprintf("@Configuration %s must not declare type parameters", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must not declare type parameters", label),
 		}
 	}
 	if _, ok := named.Underlying().(*types.Struct); !ok {
 		return nil, &problem{
 			kind:    "invalid-type",
-			message: fmt.Sprintf("@Configuration %s must have a struct underlying type", label),
+			message: fmt.Sprintf("@ConfigurationProperties %s must have a struct underlying type", label),
 		}
 	}
 	return named, nil
@@ -289,14 +289,14 @@ func configurationPrefix(occurrence resolve.Occurrence, symbol load.Symbol) (str
 	if len(occurrence.Annotation.Arguments) != 1 {
 		return "", &problem{
 			kind:    "arguments",
-			message: fmt.Sprintf("@Configuration %s accepts only the optional named string argument prefix", symbol.DisplayLabel),
+			message: fmt.Sprintf("@ConfigurationProperties %s accepts only the optional named string argument prefix", symbol.DisplayLabel),
 		}
 	}
 	argument := occurrence.Annotation.Arguments[0]
 	if argument.Name != "prefix" || argument.Value.Kind != annotation.KindString {
 		return "", &problem{
 			kind:    "arguments",
-			message: fmt.Sprintf("@Configuration %s accepts only the optional named string argument prefix", symbol.DisplayLabel),
+			message: fmt.Sprintf("@ConfigurationProperties %s accepts only the optional named string argument prefix", symbol.DisplayLabel),
 		}
 	}
 	return argument.Value.String, nil
@@ -319,7 +319,7 @@ func analyzeField(
 				position,
 				physical,
 				"unexported",
-				fmt.Sprintf("@Configuration field %s.%s is unexported and cannot be generated", owner.Name, variable.Name()),
+				fmt.Sprintf("@ConfigurationProperties field %s.%s is unexported and cannot be generated", owner.Name, variable.Name()),
 			)
 			return Field{}, &diagnostic, false
 		}
@@ -332,7 +332,7 @@ func analyzeField(
 			position,
 			physical,
 			"embedded",
-			fmt.Sprintf("@Configuration field %s.%s is embedded; flatten configuration explicitly", owner.Name, variable.Name()),
+			fmt.Sprintf("@ConfigurationProperties field %s.%s is embedded; flatten configuration explicitly", owner.Name, variable.Name()),
 		)
 		return Field{}, &diagnostic, false
 	}
@@ -343,7 +343,7 @@ func analyzeField(
 			position,
 			physical,
 			"missing-tag",
-			fmt.Sprintf("@Configuration field %s.%s requires a %s tag or %s:\"-\"", owner.Name, variable.Name(), fieldTagName, fieldTagName),
+			fmt.Sprintf("@ConfigurationProperties field %s.%s requires a %s tag or %s:\"-\"", owner.Name, variable.Name(), fieldTagName, fieldTagName),
 		)
 		return Field{}, &diagnostic, false
 	}
@@ -365,7 +365,7 @@ func analyzeField(
 			physical,
 			"unsupported-type",
 			fmt.Sprintf(
-				"@Configuration field %s.%s has unsupported type %s; supported scalar types are string, bool, signed integers, and time.Duration",
+				"@ConfigurationProperties field %s.%s has unsupported type %s; supported scalar types are string, bool, signed integers, and time.Duration",
 				owner.Name,
 				variable.Name(),
 				provider.TypeID(variable.Type()),
@@ -381,7 +381,7 @@ func analyzeField(
 			physical,
 			"unexported-type",
 			fmt.Sprintf(
-				"@Configuration field %s.%s uses unexported type %s, which target-scoped generated code cannot name",
+				"@ConfigurationProperties field %s.%s uses unexported type %s, which target-scoped generated code cannot name",
 				owner.Name,
 				variable.Name(),
 				provider.TypeID(variable.Type()),
@@ -541,11 +541,11 @@ func validateField(field Field) error {
 		Secret:      field.Secret,
 	}
 	if _, err := runtimeconfig.NewSchema(property); err != nil {
-		return fmt.Errorf("@Configuration field %s is invalid: %w", field.Name, err)
+		return fmt.Errorf("@ConfigurationProperties field %s is invalid: %w", field.Name, err)
 	}
 	if field.HasDefault && field.Kind == runtimeconfig.KindInteger {
 		if err := validateIntegerDefault(field.Type, field.Default); err != nil {
-			return fmt.Errorf("@Configuration field %s default is invalid: %w", field.Name, err)
+			return fmt.Errorf("@ConfigurationProperties field %s default is invalid: %w", field.Name, err)
 		}
 	}
 	return nil

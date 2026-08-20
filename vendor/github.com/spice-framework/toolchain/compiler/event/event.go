@@ -1,6 +1,6 @@
-// Package event compiles typed event topic markers and provider-owned
-// listeners into deterministic application metadata. It never executes marker
-// functions, providers, or listener methods.
+// Package event compiles type-owned event topics, compatible function topic
+// markers, and provider-owned listeners into deterministic application
+// metadata. It never executes declarations, providers, or listener methods.
 package event
 
 import (
@@ -414,6 +414,7 @@ func buildTopics(
 			continue
 		}
 		topic, synthetic, selected, problem := analyzeTopic(
+			program,
 			occurrence,
 			marker,
 			listeners,
@@ -448,26 +449,38 @@ func buildTopics(
 }
 
 func analyzeTopic(
+	program *load.Program,
 	occurrence resolve.Occurrence,
 	marker load.Symbol,
 	listeners []Listener,
 	modules modulith.Model,
 	fileSet *token.FileSet,
 ) (Topic, provider.Provider, []Listener, *Diagnostic) {
-	publisher, payload, problem := validateTopicMarker(
+	publisher, payload, problem := validateTopicDeclaration(
+		program,
 		occurrence,
 		marker,
 	)
 	if problem != nil {
 		return Topic{}, provider.Provider{}, nil, problem
 	}
-	selected, dependencies, problem := selectTopicListeners(
-		occurrence,
-		marker,
-		payload,
-		listeners,
-		fileSet,
-	)
+	var selected []Listener
+	var dependencies []provider.Dependency
+	if occurrence.Target == annotation.TargetType {
+		selected, dependencies = selectTypeTopicListeners(
+			marker,
+			payload,
+			listeners,
+		)
+	} else {
+		selected, dependencies, problem = selectTopicListeners(
+			occurrence,
+			marker,
+			payload,
+			listeners,
+			fileSet,
+		)
+	}
 	if problem != nil {
 		return Topic{}, provider.Provider{}, nil, problem
 	}
@@ -508,6 +521,75 @@ func analyzeTopic(
 		ReturnsError:     true,
 	}
 	return topic, synthetic, selected, nil
+}
+
+func validateTopicDeclaration(
+	program *load.Program,
+	occurrence resolve.Occurrence,
+	marker load.Symbol,
+) (types.Type, types.Type, *Diagnostic) {
+	if occurrence.Target == annotation.TargetType {
+		return validateTopicType(program, occurrence, marker)
+	}
+	return validateTopicMarker(occurrence, marker)
+}
+
+func validateTopicType(
+	program *load.Program,
+	occurrence resolve.Occurrence,
+	marker load.Symbol,
+) (types.Type, types.Type, *Diagnostic) {
+	typeName, ok := marker.Object.(*types.TypeName)
+	if marker.Kind != load.SymbolType || !ok || typeName.IsAlias() ||
+		!token.IsExported(marker.Name) {
+		return nil, nil, topicProblem(
+			occurrence,
+			marker.ID,
+			"invalid-topic-type",
+			"event topics on types require an exported defined named payload type",
+		)
+	}
+	payload, ok := types.Unalias(typeName.Type()).(*types.Named)
+	if !ok || payload.TypeParams() != nil && payload.TypeParams().Len() != 0 {
+		return nil, nil, topicProblem(
+			occurrence,
+			marker.ID,
+			"invalid-topic-type",
+			"event topic payload types must be non-generic defined named values",
+		)
+	}
+	if len(occurrence.Annotation.Arguments) != 0 {
+		return nil, nil, topicProblem(
+			occurrence,
+			marker.ID,
+			"topic-arguments",
+			"event topic declarations do not accept arguments",
+		)
+	}
+	publisherOrigin := loadedNamedType(program, eventPackagePath, "Publisher")
+	if publisherOrigin == nil {
+		return nil, nil, topicProblem(
+			occurrence,
+			marker.ID,
+			"publisher-type",
+			"event.Publisher is unavailable in the loaded Go type universe",
+		)
+	}
+	publisher, err := types.Instantiate(
+		nil,
+		publisherOrigin,
+		[]types.Type{payload},
+		true,
+	)
+	if err != nil {
+		return nil, nil, topicProblem(
+			occurrence,
+			marker.ID,
+			"publisher-type",
+			fmt.Sprintf("instantiate event.Publisher[%s]: %v", provider.TypeID(payload), err),
+		)
+	}
+	return publisher, payload, nil
 }
 
 func validateTopicMarker(
@@ -563,6 +645,75 @@ func validateTopicMarker(
 		)
 	}
 	return publisher, payload, nil
+}
+
+func selectTypeTopicListeners(
+	marker load.Symbol,
+	payload types.Type,
+	listeners []Listener,
+) ([]Listener, []provider.Dependency) {
+	selected := make([]Listener, 0, len(listeners))
+	for _, listener := range listeners {
+		if types.Identical(payload, listener.Payload) {
+			selected = append(selected, listener)
+		}
+	}
+	seenProviders := make(map[string]struct{}, len(selected))
+	dependencies := make([]provider.Dependency, 0, len(selected))
+	for _, listener := range selected {
+		if _, duplicate := seenProviders[listener.ProviderID]; duplicate {
+			continue
+		}
+		seenProviders[listener.ProviderID] = struct{}{}
+		dependencies = append(dependencies, provider.Dependency{
+			Index:            len(dependencies),
+			Name:             listener.Method.Name,
+			Type:             listener.Receiver,
+			TypeID:           listener.ReceiverTypeID,
+			Position:         listener.Position,
+			PhysicalPosition: listener.PhysicalPosition,
+		})
+	}
+	return selected, dependencies
+}
+
+func loadedNamedType(
+	program *load.Program,
+	packagePath string,
+	name string,
+) *types.Named {
+	if program == nil {
+		return nil
+	}
+	seen := make(map[*types.Package]struct{})
+	var found *types.Named
+	var visit func(*types.Package)
+	visit = func(pkg *types.Package) {
+		if pkg == nil || found != nil {
+			return
+		}
+		if _, duplicate := seen[pkg]; duplicate {
+			return
+		}
+		seen[pkg] = struct{}{}
+		if pkg.Path() == packagePath {
+			if object, ok := pkg.Scope().Lookup(name).(*types.TypeName); ok &&
+				!object.IsAlias() {
+				candidate, named := object.Type().(*types.Named)
+				if named {
+					found = candidate
+				}
+			}
+			return
+		}
+		for _, imported := range pkg.Imports() {
+			visit(imported)
+		}
+	}
+	for _, pkg := range program.Packages() {
+		visit(pkg.Types)
+	}
+	return found
 }
 
 func selectTopicListeners(

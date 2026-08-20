@@ -62,6 +62,27 @@ type modelHashCache struct {
 	Value  string `json:"value"`
 }
 
+type modelHashPolicyMethod struct {
+	ID            string                         `json:"id,omitempty"`
+	Name          string                         `json:"name"`
+	Parameters    []string                       `json:"parameters"`
+	Results       []string                       `json:"results"`
+	Variadic      bool                           `json:"variadic,omitempty"`
+	Transaction   *sdk.TransactionContribution   `json:"transaction,omitempty"`
+	Authorization *sdk.AuthorizationContribution `json:"authorization,omitempty"`
+	Cache         *sdk.CacheContribution         `json:"cache,omitempty"`
+	Retry         *sdk.RetryContribution         `json:"retry,omitempty"`
+	Observation   *sdk.ObservationContribution   `json:"observation,omitempty"`
+}
+
+type modelHashPolicyService struct {
+	Provider  string                  `json:"provider"`
+	Interface string                  `json:"interface"`
+	Module    string                  `json:"module"`
+	Manager   string                  `json:"manager,omitempty"`
+	Methods   []modelHashPolicyMethod `json:"methods"`
+}
+
 type modelHashDependency struct {
 	Index      int                     `json:"index"`
 	Type       string                  `json:"type"`
@@ -73,6 +94,7 @@ type modelHashDependency struct {
 type modelHashProvider struct {
 	ID            string                `json:"id"`
 	Source        provider.Source       `json:"source"`
+	Role          string                `json:"role,omitempty"`
 	SourceID      string                `json:"source_id,omitempty"`
 	SourceVersion string                `json:"source_version,omitempty"`
 	Module        string                `json:"module,omitempty"`
@@ -221,6 +243,7 @@ type modelHashInput struct {
 	AsyncTasks     []modelHashAsyncTask        `json:"async_tasks,omitempty"`
 	Events         []modelHashEventTopic       `json:"events,omitempty"`
 	Caches         []modelHashCache            `json:"caches,omitempty"`
+	Policies       []modelHashPolicyService    `json:"policies,omitempty"`
 	Roots          []modelHashRoot             `json:"roots"`
 	Bootstrap      []modelHashBootstrapFeature `json:"bootstrap"`
 	Modules        []modelHashModule           `json:"modules,omitempty"`
@@ -258,6 +281,7 @@ func modelHash(
 		value.Providers = append(value.Providers, modelHashProvider{
 			ID:            item.SymbolID,
 			Source:        item.Source,
+			Role:          item.Role,
 			SourceID:      item.SourceID,
 			SourceVersion: item.SourceVersion,
 			Module:        providerModules[item.SymbolID],
@@ -380,6 +404,7 @@ func modelHash(
 	)
 	value.Events = modelHashEvents(model.Events())
 	value.Caches = modelHashCaches(model.Caches())
+	value.Policies = modelHashPolicies(model)
 	addModelHashModules(&value, model, applicationTarget)
 	for _, root := range applicationTarget.Roots() {
 		value.Roots = append(value.Roots, modelHashRoot{
@@ -393,6 +418,39 @@ func modelHash(
 		return "", err
 	}
 	return contentHash(encoded), nil
+}
+
+func modelHashPolicies(model application.Model) []modelHashPolicyService {
+	services := model.Policies()
+	result := make([]modelHashPolicyService, len(services))
+	for index, service := range services {
+		item := modelHashPolicyService{
+			Provider:  service.Provider.SymbolID,
+			Interface: service.Interface.TypeID,
+			Module:    service.Module,
+			Manager:   service.ManagerProviderID,
+		}
+		for _, method := range service.Methods() {
+			methodInput := modelHashPolicyMethod{
+				ID: method.MethodID, Name: method.Name,
+				Variadic:      method.Signature.Variadic(),
+				Transaction:   method.Transaction,
+				Authorization: method.Authorization,
+				Cache:         method.Cache,
+				Retry:         method.Retry,
+				Observation:   method.Observation,
+			}
+			for parameter := range method.Signature.Params().Variables() {
+				methodInput.Parameters = append(methodInput.Parameters, provider.TypeID(parameter.Type()))
+			}
+			for resultValue := range method.Signature.Results().Variables() {
+				methodInput.Results = append(methodInput.Results, provider.TypeID(resultValue.Type()))
+			}
+			item.Methods = append(item.Methods, methodInput)
+		}
+		result[index] = item
+	}
+	return result
 }
 
 func addModelHashModules(

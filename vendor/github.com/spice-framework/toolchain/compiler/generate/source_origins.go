@@ -16,6 +16,7 @@ import (
 	compilerlifecycle "github.com/spice-framework/toolchain/compiler/lifecycle"
 	"github.com/spice-framework/toolchain/compiler/load"
 	"github.com/spice-framework/toolchain/compiler/modulith"
+	compilerpolicy "github.com/spice-framework/toolchain/compiler/policy"
 	"github.com/spice-framework/toolchain/compiler/provider"
 	compilerschedule "github.com/spice-framework/toolchain/compiler/schedule"
 	compilertransaction "github.com/spice-framework/toolchain/compiler/transaction"
@@ -72,9 +73,28 @@ func modelSourceOrigins(
 	collector.addAsync(model.AsyncTasks())
 	collector.addEvents(model.Events())
 	collector.addBoundaries(model.Transactions(), model.Caches())
+	collector.addPolicies(model.Policies())
 	collector.addModules(model.Modules())
 	sortSourceOrigins(collector.origins)
 	return slices.Compact(collector.origins)
+}
+
+func (collector *sourceOriginCollector) addPolicies(
+	services []compilerpolicy.Service,
+) {
+	for _, service := range services {
+		for _, method := range service.Methods() {
+			if !method.Decorated() {
+				continue
+			}
+			collector.add(
+				method.PhysicalPosition,
+				method.Position,
+				method.MethodID+"#policy",
+				service.Provider.PackagePath,
+			)
+		}
+	}
 }
 
 type sourceOriginCollector struct {

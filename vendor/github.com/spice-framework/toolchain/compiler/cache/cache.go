@@ -15,6 +15,7 @@ import (
 	"github.com/spice-framework/spice/annotation/sdk"
 	"github.com/spice-framework/toolchain/compiler/controller"
 	"github.com/spice-framework/toolchain/compiler/load"
+	"github.com/spice-framework/toolchain/compiler/provider"
 	"github.com/spice-framework/toolchain/compiler/resolve"
 )
 
@@ -95,6 +96,18 @@ func Build(
 	resolution resolve.Result,
 	controllers []controller.Controller,
 ) Catalog {
+	return BuildWithProviders(program, resolution, controllers, nil)
+}
+
+// BuildWithProviders additionally recognizes service-owned methods so their
+// generic cache policy remains owned by compiler/policy rather than the HTTP
+// route compiler.
+func BuildWithProviders(
+	program *load.Program,
+	resolution resolve.Result,
+	controllers []controller.Controller,
+	providers []provider.Provider,
+) Catalog {
 	catalog := Catalog{}
 	if program == nil {
 		catalog.diagnostics = []Diagnostic{{
@@ -104,7 +117,7 @@ func Build(
 		return catalog
 	}
 	routes := routeIndex(controllers)
-	occurrences := cacheOccurrences(resolution)
+	occurrences := cacheOccurrences(program, resolution, providers)
 	cacheNames := make(map[string]Boundary)
 	environmentNames := make(map[string]Boundary)
 	for _, routeID := range sortedOccurrenceIDs(occurrences) {
@@ -340,11 +353,15 @@ func routeIndex(
 }
 
 func cacheOccurrences(
+	program *load.Program,
 	resolution resolve.Result,
+	providers []provider.Provider,
 ) map[string][]resolve.Occurrence {
 	result := make(map[string][]resolve.Occurrence)
+	serviceMethods := serviceMethodIDs(program, providers)
 	for _, occurrence := range resolution.Occurrences {
-		if occurrence.HasContribution(sdk.ContributionCache) {
+		if occurrence.HasContribution(sdk.ContributionCache) &&
+			!serviceMethods[occurrence.SymbolID] {
 			result[occurrence.SymbolID] = append(
 				result[occurrence.SymbolID],
 				occurrence,
@@ -361,6 +378,31 @@ func cacheOccurrences(
 			return occurrences[left].PhysicalOffset <
 				occurrences[right].PhysicalOffset
 		})
+	}
+	return result
+}
+
+func serviceMethodIDs(
+	program *load.Program,
+	providers []provider.Provider,
+) map[string]bool {
+	result := make(map[string]bool)
+	if program == nil || len(providers) == 0 {
+		return result
+	}
+	for _, symbol := range program.Symbols() {
+		if symbol.Signature == nil || symbol.Signature.Recv() == nil {
+			continue
+		}
+		for _, item := range providers {
+			if item.Role == "service" && types.Identical(
+				item.Output,
+				symbol.Signature.Recv().Type(),
+			) {
+				result[symbol.ID] = true
+				break
+			}
+		}
 	}
 	return result
 }

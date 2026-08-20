@@ -83,7 +83,8 @@ type InterfaceBinding struct {
 type Source string
 
 const (
-	// SourceBean identifies a direct package-level @Bean factory call.
+	// SourceBean identifies a direct package-level or configuration-method
+	// @Bean factory call.
 	SourceBean Source = "bean"
 	// SourceStereotype identifies a constructible @Service, @Controller, or
 	// repository stereotype type.
@@ -110,10 +111,12 @@ const (
 )
 
 // Provider describes one exact-type construction node. Bean providers call a
-// validated package-level function; configuration providers are synthesized
-// from validated @Configuration metadata.
+// validated package-level function or configuration method; configuration
+// property providers are synthesized from validated @ConfigurationProperties
+// metadata.
 type Provider struct {
 	Source           Source
+	Role             string
 	Construction     Construction
 	Symbol           load.Symbol
 	Constructor      load.Symbol
@@ -562,6 +565,11 @@ func Build(program *load.Program, resolution resolve.Result) Catalog {
 
 	attachInterfaceBindings(&catalog, build, resolution)
 	attachBeanMetadata(&catalog, resolution)
+	var methodDiagnostics []Diagnostic
+	catalog.providers, methodDiagnostics = validConfigurationMethods(
+		catalog.providers,
+	)
+	catalog.diagnostics = append(catalog.diagnostics, methodDiagnostics...)
 	normalizeProviderMetadata(catalog.providers)
 	sort.SliceStable(catalog.providers, func(i, j int) bool {
 		return catalog.providers[i].SymbolID < catalog.providers[j].SymbolID
@@ -576,6 +584,47 @@ func Build(program *load.Program, resolution resolve.Result) Catalog {
 	)
 	sortDiagnostics(catalog.diagnostics)
 	return catalog
+}
+
+func validConfigurationMethods(
+	providers []Provider,
+) ([]Provider, []Diagnostic) {
+	valid := make([]Provider, 0, len(providers))
+	var diagnostics []Diagnostic
+	for index := range providers {
+		item := &providers[index]
+		if item.Source != SourceBean ||
+			item.Constructor.Kind != load.SymbolMethod {
+			valid = append(valid, *item)
+			continue
+		}
+		matches := 0
+		if len(item.Dependencies) != 0 {
+			receiver := item.Dependencies[0].Type
+			for candidateIndex := range providers {
+				candidate := &providers[candidateIndex]
+				if candidate.Source == SourceStereotype &&
+					candidate.Role == "configuration" &&
+					types.Identical(candidate.Output, receiver) {
+					matches++
+				}
+			}
+		}
+		if matches == 1 {
+			valid = append(valid, *item)
+			continue
+		}
+		diagnostics = append(diagnostics, beanIdentityDiagnostic(
+			item,
+			"configuration-method-owner",
+			fmt.Sprintf(
+				"@Bean method %s receiver requires exactly one constructible @Configuration provider, found %d",
+				item.Symbol.DisplayLabel,
+				matches,
+			),
+		))
+	}
+	return valid, diagnostics
 }
 
 func unboundProviderIdentity(
@@ -690,6 +739,7 @@ func (build buildContext) stereotypeProvider(
 			occurrence,
 			symbol,
 			named,
+			contribution.Role,
 		), nil
 	}
 
@@ -728,6 +778,7 @@ func (build buildContext) stereotypeProvider(
 	}
 	item.Symbol = symbol
 	item.SymbolID = symbol.ID
+	item.Role = contribution.Role
 	item.Name = lowerInitial(symbol.Name)
 	if contribution.Name != "" {
 		item.Name = contribution.Name
@@ -794,10 +845,12 @@ func allocatedStereotypeProvider(
 	occurrence resolve.Occurrence,
 	symbol load.Symbol,
 	named *types.Named,
+	role string,
 ) Provider {
 	output := types.NewPointer(named)
 	return Provider{
 		Source:           SourceStereotype,
+		Role:             role,
 		Construction:     ConstructionAllocate,
 		Symbol:           symbol,
 		SymbolID:         symbol.ID,
@@ -1575,7 +1628,13 @@ func analyzeProvider(
 		targetLabel = "@Bean " + label
 	}
 	label = role + " " + label
-	signature, problem := providerSignature(occurrence, symbol, label, targetLabel)
+	signature, problem := providerSignature(
+		occurrence,
+		symbol,
+		source,
+		label,
+		targetLabel,
+	)
 	if problem != nil {
 		diagnostic := symbolDiagnostic(occurrence, symbol, problem.kind, problem.message)
 		return Provider{}, &diagnostic
@@ -1587,6 +1646,9 @@ func analyzeProvider(
 	}
 
 	dependencies := providerDependencies(signature, fileSet)
+	if signature.Recv() != nil {
+		dependencies = providerMethodDependencies(signature, fileSet)
+	}
 	return Provider{
 		Source:           source,
 		Construction:     ConstructionFactory,
@@ -1611,13 +1673,19 @@ func analyzeProvider(
 func providerSignature(
 	occurrence resolve.Occurrence,
 	symbol load.Symbol,
+	source Source,
 	label string,
 	targetLabel string,
 ) (*types.Signature, *providerProblem) {
-	if occurrence.Target != annotation.TargetFunction || symbol.Kind != load.SymbolFunction || symbol.Receiver != "" {
+	packageFunction := occurrence.Target == annotation.TargetFunction &&
+		symbol.Kind == load.SymbolFunction && symbol.Receiver == ""
+	configurationMethod := source == SourceBean &&
+		occurrence.Target == annotation.TargetMethod &&
+		symbol.Kind == load.SymbolMethod && symbol.Receiver != ""
+	if !packageFunction && !configurationMethod {
 		return nil, &providerProblem{
 			kind:    "invalid-target",
-			message: fmt.Sprintf("%s must target a package-level function; provider methods and other declarations are not supported", targetLabel),
+			message: fmt.Sprintf("%s must target a package-level function or a method on a constructible @Configuration type", targetLabel),
 		}
 	}
 	signature := symbol.Signature
@@ -1772,22 +1840,59 @@ func metadataCounts(metadata []types.Type, cleanupType types.Type) (errorResults
 func providerDependencies(signature *types.Signature, fileSet *token.FileSet) []Dependency {
 	dependencies := make([]Dependency, signature.Params().Len())
 	for index := 0; index < signature.Params().Len(); index++ {
-		parameter := signature.Params().At(index)
-		dependency := Dependency{
-			Index:  index,
-			Name:   parameter.Name(),
-			Type:   parameter.Type(),
-			TypeID: TypeID(parameter.Type()),
-			Kind:   DependencySingle,
-		}
-		classifyDependency(&dependency)
-		if fileSet != nil && parameter.Pos().IsValid() {
-			dependency.Position = fileSet.PositionFor(parameter.Pos(), true)
-			dependency.PhysicalPosition = fileSet.PositionFor(parameter.Pos(), false)
-		}
-		dependencies[index] = dependency
+		dependencies[index] = dependencyFromVariable(
+			signature.Params().At(index),
+			index,
+			fileSet,
+		)
 	}
 	return dependencies
+}
+
+func providerMethodDependencies(
+	signature *types.Signature,
+	fileSet *token.FileSet,
+) []Dependency {
+	dependencies := make(
+		[]Dependency,
+		0,
+		1+signature.Params().Len(),
+	)
+	dependencies = append(
+		dependencies,
+		dependencyFromVariable(signature.Recv(), 0, fileSet),
+	)
+	for index := range signature.Params().Len() {
+		dependencies = append(
+			dependencies,
+			dependencyFromVariable(
+				signature.Params().At(index),
+				index+1,
+				fileSet,
+			),
+		)
+	}
+	return dependencies
+}
+
+func dependencyFromVariable(
+	parameter *types.Var,
+	index int,
+	fileSet *token.FileSet,
+) Dependency {
+	dependency := Dependency{
+		Index:  index,
+		Name:   parameter.Name(),
+		Type:   parameter.Type(),
+		TypeID: TypeID(parameter.Type()),
+		Kind:   DependencySingle,
+	}
+	classifyDependency(&dependency)
+	if fileSet != nil && parameter.Pos().IsValid() {
+		dependency.Position = fileSet.PositionFor(parameter.Pos(), true)
+		dependency.PhysicalPosition = fileSet.PositionFor(parameter.Pos(), false)
+	}
+	return dependency
 }
 
 func classifyDependency(dependency *Dependency) {

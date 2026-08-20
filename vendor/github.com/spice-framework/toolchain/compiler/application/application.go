@@ -22,11 +22,13 @@ import (
 	compilercache "github.com/spice-framework/toolchain/compiler/cache"
 	"github.com/spice-framework/toolchain/compiler/configuration"
 	"github.com/spice-framework/toolchain/compiler/controller"
+	compilerenum "github.com/spice-framework/toolchain/compiler/enum"
 	compilerevent "github.com/spice-framework/toolchain/compiler/event"
 	"github.com/spice-framework/toolchain/compiler/graph"
 	"github.com/spice-framework/toolchain/compiler/lifecycle"
 	"github.com/spice-framework/toolchain/compiler/load"
 	"github.com/spice-framework/toolchain/compiler/modulith"
+	compilerpolicy "github.com/spice-framework/toolchain/compiler/policy"
 	"github.com/spice-framework/toolchain/compiler/provider"
 	"github.com/spice-framework/toolchain/compiler/resolve"
 	compilerschedule "github.com/spice-framework/toolchain/compiler/schedule"
@@ -54,10 +56,14 @@ const (
 	StageSchedule Stage = "schedule"
 	// StageAsync identifies asynchronous-method validation.
 	StageAsync Stage = "async"
+	// StagePolicy identifies generated service-method policy validation.
+	StagePolicy Stage = "policy"
 	// StageTransaction identifies generated transaction-boundary validation.
 	StageTransaction Stage = "transaction"
 	// StageEvent identifies typed event topic and listener validation.
 	StageEvent Stage = "event"
+	// StageEnum identifies closed enum declaration validation.
+	StageEnum Stage = "enum"
 	// StageModule identifies application-module architecture validation.
 	StageModule Stage = "module"
 	// StageConfiguration identifies typed configuration validation.
@@ -148,7 +154,9 @@ type Model struct {
 	components   []lifecycle.Component
 	jobs         []compilerschedule.Job
 	asyncTasks   []compilerasync.Task
+	policies     []compilerpolicy.Service
 	events       []compilerevent.Topic
+	enums        []compilerenum.Type
 	transactions []compilertransaction.Boundary
 	caches       []compilercache.Boundary
 	configTypes  []configuration.Type
@@ -207,9 +215,24 @@ func (m Model) AsyncTasks() []compilerasync.Task {
 	return append([]compilerasync.Task(nil), m.asyncTasks...)
 }
 
+// Policies returns immutable generated service-method decorator metadata in
+// stable provider identity order.
+func (m Model) Policies() []compilerpolicy.Service {
+	result := make([]compilerpolicy.Service, len(m.policies))
+	for index := range m.policies {
+		result[index] = m.policies[index].Clone()
+	}
+	return result
+}
+
 // Events returns generated typed event topics in stable marker identity order.
 func (m Model) Events() []compilerevent.Topic {
 	return append([]compilerevent.Topic(nil), m.events...)
+}
+
+// Enums returns validated closed enum declarations in stable symbol order.
+func (m Model) Enums() []compilerenum.Type {
+	return append([]compilerenum.Type(nil), m.enums...)
 }
 
 // Transactions returns immutable generated transaction boundaries in stable
@@ -325,6 +348,13 @@ func BuildWithOptions(
 		return model
 	}
 
+	enumCatalog := compilerenum.Build(program, resolution)
+	if diagnostics := enumCatalog.Diagnostics(); len(diagnostics) != 0 {
+		model.diagnostics = enumDiagnostics(diagnostics)
+		return model
+	}
+	model.enums = enumCatalog.Types()
+
 	configurationCatalog := configuration.Build(program, resolution, model.moduleModel)
 	if diagnostics := configurationCatalog.Diagnostics(); len(diagnostics) != 0 {
 		model.diagnostics = configurationDiagnostics(diagnostics)
@@ -345,10 +375,29 @@ func BuildWithOptions(
 	if len(model.diagnostics) != 0 {
 		return model
 	}
-
 	providerGraph := graph.Build(providerCatalog)
 	if diagnostics := providerGraph.Diagnostics(); len(diagnostics) != 0 {
 		model.diagnostics = graphDiagnostics(diagnostics)
+		return model
+	}
+	policyCatalog := compilerpolicy.Build(
+		program,
+		resolution,
+		providerCatalog,
+		model.moduleModel,
+	)
+	if diagnostics := policyCatalog.Diagnostics(); len(diagnostics) != 0 {
+		model.diagnostics = policyDiagnostics(diagnostics)
+		return model
+	}
+	model.policies = policyCatalog.Services()
+	policyProviderOrder, policyOrderDiagnostic := orderProvidersForPolicies(
+		providerGraph.ConstructionOrder(),
+		providerGraph.Edges(),
+		model.policies,
+	)
+	if policyOrderDiagnostic != nil {
+		model.diagnostics = []Diagnostic{*policyOrderDiagnostic}
 		return model
 	}
 
@@ -362,6 +411,13 @@ func BuildWithOptions(
 		model.moduleModel,
 	)
 	if len(model.diagnostics) != 0 {
+		return model
+	}
+	if diagnostics := serviceCacheIdentityDiagnostics(
+		model.policies,
+		model.caches,
+	); len(diagnostics) != 0 {
+		model.diagnostics = diagnostics
 		return model
 	}
 
@@ -400,7 +456,7 @@ func BuildWithOptions(
 		return model
 	}
 
-	model.providers = providerGraph.ConstructionOrder()
+	model.providers = policyProviderOrder
 	model.edges = providerGraph.Edges()
 	model.components = orderedComponents(model.providers, lifecycleCatalog.Components())
 	model.jobs = scheduleCatalog.Jobs()
@@ -441,6 +497,98 @@ type scopedProviderUse struct {
 	position         token.Position
 	physicalPosition token.Position
 	symbolID         string
+}
+
+func orderProvidersForPolicies(
+	providers []provider.Provider,
+	edges []graph.Edge,
+	policies []compilerpolicy.Service,
+) ([]provider.Provider, *Diagnostic) {
+	if len(policies) == 0 {
+		return providers, nil
+	}
+	byID := make(map[string]provider.Provider, len(providers))
+	adjacency := make(map[string]map[string]struct{}, len(providers))
+	indegree := make(map[string]int, len(providers))
+	for _, item := range providers {
+		byID[item.SymbolID] = item
+		indegree[item.SymbolID] = 0
+	}
+	add := func(dependencyID, consumerID string) {
+		if dependencyID == "" || consumerID == "" {
+			return
+		}
+		if adjacency[dependencyID] == nil {
+			adjacency[dependencyID] = make(map[string]struct{})
+		}
+		if _, duplicate := adjacency[dependencyID][consumerID]; duplicate {
+			return
+		}
+		adjacency[dependencyID][consumerID] = struct{}{}
+		indegree[consumerID]++
+	}
+	for _, edge := range edges {
+		add(edge.DependencyID, edge.ConsumerID)
+	}
+	for _, service := range policies {
+		if service.ManagerProviderID != "" {
+			add(service.ManagerProviderID, service.Provider.SymbolID)
+		}
+	}
+	ready := make([]string, 0, len(providers))
+	for providerID, count := range indegree {
+		if count == 0 {
+			ready = append(ready, providerID)
+		}
+	}
+	sort.Strings(ready)
+	result := make([]provider.Provider, 0, len(providers))
+	for len(ready) != 0 {
+		providerID := ready[0]
+		ready = ready[1:]
+		result = append(result, byID[providerID])
+		consumers := make([]string, 0, len(adjacency[providerID]))
+		for consumerID := range adjacency[providerID] {
+			consumers = append(consumers, consumerID)
+		}
+		sort.Strings(consumers)
+		for _, consumerID := range consumers {
+			indegree[consumerID]--
+			if indegree[consumerID] == 0 {
+				ready = append(ready, consumerID)
+				sort.Strings(ready)
+			}
+		}
+	}
+	if len(result) == len(providers) {
+		return result, nil
+	}
+	for _, service := range policies {
+		if service.ManagerProviderID == "" || indegree[service.Provider.SymbolID] == 0 {
+			continue
+		}
+		for _, method := range service.Methods() {
+			if method.Transaction == nil {
+				continue
+			}
+			return nil, &Diagnostic{
+				Stage:            StagePolicy,
+				Position:         method.Position,
+				PhysicalPosition: method.PhysicalPosition,
+				SymbolID:         method.MethodID,
+				Kind:             "policy-dependency-cycle",
+				Message: fmt.Sprintf(
+					"transactional service %q and its *data.Manager provider form a construction dependency cycle",
+					service.Provider.Name,
+				),
+			}
+		}
+	}
+	return nil, &Diagnostic{
+		Stage:   StagePolicy,
+		Kind:    "policy-dependency-cycle",
+		Message: "generated service method policies form a provider construction dependency cycle",
+	}
 }
 
 func scopedComponentDiagnostics(
@@ -540,6 +688,55 @@ func scopedComponentDiagnostics(
 	return diagnostics
 }
 
+func serviceCacheIdentityDiagnostics(
+	policies []compilerpolicy.Service,
+	httpCaches []compilercache.Boundary,
+) []Diagnostic {
+	type owner struct {
+		name     string
+		methodID string
+		position token.Position
+		physical token.Position
+	}
+	byName := make(map[string]owner)
+	byEnvironment := make(map[string]owner)
+	var diagnostics []Diagnostic
+	check := func(name, methodID string, position, physical token.Position) {
+		current := owner{name: name, methodID: methodID, position: position, physical: physical}
+		if first, duplicate := byName[name]; duplicate {
+			diagnostics = append(diagnostics, Diagnostic{
+				Stage: StagePolicy, Position: position, PhysicalPosition: physical,
+				SymbolID: methodID, Kind: "duplicate-cache-name",
+				Message: fmt.Sprintf("generated cache name %q is already owned by %q at %s", name, first.methodID, first.position),
+			})
+			return
+		}
+		byName[name] = current
+		environment := strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(name))
+		if first, duplicate := byEnvironment[environment]; duplicate {
+			diagnostics = append(diagnostics, Diagnostic{
+				Stage: StagePolicy, Position: position, PhysicalPosition: physical,
+				SymbolID: methodID, Kind: "duplicate-cache-environment",
+				Message: fmt.Sprintf("generated cache names %q and %q produce the same environment identity %q", first.name, name, environment),
+			})
+			return
+		}
+		byEnvironment[environment] = current
+	}
+	for _, boundary := range httpCaches {
+		check(boundary.CacheName, boundary.RouteID, boundary.Position, boundary.PhysicalPosition)
+	}
+	for _, service := range policies {
+		for _, method := range service.Methods() {
+			if method.Cache != nil {
+				check(method.Cache.Name, method.MethodID, method.Position, method.PhysicalPosition)
+			}
+		}
+	}
+	sortDiagnostics(diagnostics)
+	return diagnostics
+}
+
 func buildProviderMetadata(
 	program *load.Program,
 	resolution resolve.Result,
@@ -620,10 +817,11 @@ func buildHTTPMetadata(
 	if diagnostics := transactionCatalog.Diagnostics(); len(diagnostics) != 0 {
 		return nil, nil, nil, transactionDiagnostics(diagnostics)
 	}
-	cacheCatalog := compilercache.Build(
+	cacheCatalog := compilercache.BuildWithProviders(
 		program,
 		resolution,
 		controllers,
+		providers.Providers(),
 	)
 	if diagnostics := cacheCatalog.Diagnostics(); len(diagnostics) != 0 {
 		return nil, nil, nil, cacheDiagnostics(diagnostics)
@@ -1374,6 +1572,22 @@ func configurationDiagnostics(diagnostics []configuration.Diagnostic) []Diagnost
 	return result
 }
 
+func enumDiagnostics(diagnostics []compilerenum.Diagnostic) []Diagnostic {
+	result := make([]Diagnostic, len(diagnostics))
+	for index, diagnostic := range diagnostics {
+		result[index] = Diagnostic{
+			Stage:            StageEnum,
+			Position:         diagnostic.Position,
+			PhysicalPosition: diagnostic.PhysicalPosition,
+			SymbolID:         diagnostic.SymbolID,
+			Kind:             diagnostic.Kind,
+			Message:          diagnostic.Message,
+		}
+	}
+	sortDiagnostics(result)
+	return result
+}
+
 func controllerDiagnostics(diagnostics []controller.Diagnostic) []Diagnostic {
 	result := make([]Diagnostic, len(diagnostics))
 	for index, diagnostic := range diagnostics {
@@ -1447,6 +1661,24 @@ func asyncDiagnostics(
 	for index, diagnostic := range diagnostics {
 		result[index] = Diagnostic{
 			Stage:            StageAsync,
+			Position:         diagnostic.Position,
+			PhysicalPosition: diagnostic.PhysicalPosition,
+			SymbolID:         diagnostic.MethodID,
+			Kind:             diagnostic.Kind,
+			Message:          diagnostic.Message,
+		}
+	}
+	sortDiagnostics(result)
+	return result
+}
+
+func policyDiagnostics(
+	diagnostics []compilerpolicy.Diagnostic,
+) []Diagnostic {
+	result := make([]Diagnostic, len(diagnostics))
+	for index, diagnostic := range diagnostics {
+		result[index] = Diagnostic{
+			Stage:            StagePolicy,
 			Position:         diagnostic.Position,
 			PhysicalPosition: diagnostic.PhysicalPosition,
 			SymbolID:         diagnostic.MethodID,

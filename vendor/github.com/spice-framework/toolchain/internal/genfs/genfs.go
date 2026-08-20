@@ -635,7 +635,7 @@ func normalizeManifestTarget(
 	options ApplyOptions,
 ) error {
 	switch manifest.Schema {
-	case generate.SchemaVersion:
+	case generate.SchemaVersion, 5:
 		expected := plan.Manifest().Target
 		compatiblePreEntrypoint := manifest.Target
 		if compatiblePreEntrypoint.EntrypointPackagePath == "" {

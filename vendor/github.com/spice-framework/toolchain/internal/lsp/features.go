@@ -120,6 +120,7 @@ type metadataView struct {
 	providers      []compilerservice.Provider
 	modules        []compilerservice.Module
 	configurations []compilerservice.Configuration
+	enums          []compilerservice.Enum
 	goInterfaces   compilerservice.GoInterfaceCatalog
 	actions        []diagnostic.SuggestedFix
 	sourcePath     string
@@ -1565,6 +1566,14 @@ func (server *Server) codeAction(message rpcMessage) error {
 	)
 	actions = append(
 		actions,
+		enumCodeActions(
+			source,
+			params.Range,
+			metadata.enums,
+		)...,
+	)
+	actions = append(
+		actions,
 		server.annotationToolCodeActions(
 			source,
 			params.Range,
@@ -1705,6 +1714,7 @@ func (server *Server) featureSnapshot(
 		providers:      latest.ProviderGraph().Providers,
 		modules:        latest.ModuleGraph().Modules,
 		configurations: latest.Configurations(),
+		enums:          latest.Enums(),
 		goInterfaces:   latest.GoInterfaces(),
 		actions:        latest.CodeActions(),
 		sourcePath:     source.path,
@@ -1724,6 +1734,9 @@ func (server *Server) featureSnapshot(
 		}
 		if len(view.configurations) == 0 {
 			view.configurations = workspace.lastGood.Configurations()
+		}
+		if len(view.enums) == 0 {
+			view.enums = workspace.lastGood.Enums()
 		}
 		if len(view.goInterfaces.Packages) == 0 {
 			view.goInterfaces = workspace.lastGood.GoInterfaces()

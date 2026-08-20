@@ -23,7 +23,7 @@ type Stage[Input, Output any] interface {
 type ToolDispatcher interface {
 	Definitions() []tool.Definition
 	Definition(name string) (tool.Definition, bool)
-	Dispatch(context.Context, tool.Call, tool.Reporter) (tool.Result, error)
+	Dispatch(context.Context, ToolDispatchScope, tool.Call, tool.Reporter) (tool.Result, error)
 }
 
 // ToolDispatchDecorator wraps the canonical dispatcher. Spice supplies these
@@ -127,12 +127,15 @@ func (dispatcher *Dispatcher) Definition(name string) (tool.Definition, bool) {
 // Dispatch validates correlation and cancellation around one trusted in-process
 // call. Cancellation is cooperative: a Tool that ignores ctx can still block its
 // own goroutine and therefore must be treated as trusted code.
-func (dispatcher *Dispatcher) Dispatch(ctx context.Context, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
+func (dispatcher *Dispatcher) Dispatch(ctx context.Context, scope ToolDispatchScope, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
 	if ctx == nil {
 		return tool.Result{}, errors.New("tool dispatch context must not be nil")
 	}
 	if dispatcher == nil {
 		return tool.Result{}, errors.New("tool dispatcher is nil")
+	}
+	if err := scope.Validate(); err != nil {
+		return tool.Result{}, err
 	}
 	if err := call.Validate(); err != nil {
 		return tool.Result{}, err

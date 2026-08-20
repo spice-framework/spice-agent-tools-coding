@@ -290,7 +290,11 @@ func reservedConfigurationDiagnostics(
 		reservedKeys[asyncConcurrencyKey] = struct{}{}
 		reservedEnvironments["SPICE_ASYNC_MAX_CONCURRENCY"] = struct{}{}
 	}
-	for _, boundary := range model.Caches() {
+	cacheBoundaries := append(
+		model.Caches(),
+		serviceCacheBoundaries(model.Policies())...,
+	)
+	for _, boundary := range cacheBoundaries {
 		reservedKeys[cacheCapacityKey(boundary.CacheName)] = struct{}{}
 		reservedKeys[cacheTTLKey(boundary.CacheName)] = struct{}{}
 		reservedEnvironments[cacheEnvironment(

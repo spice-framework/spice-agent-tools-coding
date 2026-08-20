@@ -65,6 +65,12 @@ func writeApplicationOptions(
 		source.WriteString("\tCacheClock func() time.Time\n")
 		source.WriteString("\tCacheObservers []spicecache.Observer\n")
 	}
+	if features.retry {
+		source.WriteString("\tRetryObservers []spiceretry.Observer\n")
+	}
+	if features.methodObservation {
+		source.WriteString("\tMethodObservers []spiceobservability.MethodObserver\n")
+	}
 	source.WriteString("\tObservers []spicelifecycle.Observer\n")
 	source.WriteString("}\n\n")
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/spice-framework/toolchain/compiler/resolve"
 	"github.com/spice-framework/toolchain/compiler/scan"
 	compilerstarter "github.com/spice-framework/toolchain/compiler/starter"
+	compilerstyle "github.com/spice-framework/toolchain/compiler/style"
 	"github.com/spice-framework/toolchain/compiler/validate"
 	"github.com/spice-framework/toolchain/internal/moduleenv"
 )
@@ -284,6 +285,7 @@ type normalizedRequest struct {
 	patterns []string
 	overlay  map[string]Document
 	mode     AnalysisMode
+	profile  compilerstyle.Profile
 	content  string
 	sequence uint64
 }
@@ -517,6 +519,23 @@ func (service *Service) analyze(
 	result.providerGraph.Providers = summarizeProviders(
 		primaryProviderCatalog.Providers(),
 	)
+	if len(primaryProviderCatalog.Diagnostics()) == 0 &&
+		request.profile != compilerstyle.ProfileNone {
+		styleCatalog := compilerstyle.Build(
+			program,
+			resolution,
+			primaryProviderCatalog,
+			request.profile,
+		)
+		if diagnostics := styleCatalog.Diagnostics(); len(diagnostics) != 0 {
+			result.diagnostics = versionDiagnostics(
+				diagnosticadapt.Style(request.root, diagnostics),
+				request.overlay,
+			)
+			result.actions = actionsFromDiagnostics(result.diagnostics)
+			return result, nil
+		}
+	}
 	providerCatalogs, autoConfigurations, catalogDiagnostics := service.prepareProviderCatalogs(
 		request,
 		program,
@@ -545,6 +564,7 @@ func (service *Service) analyze(
 		result.providerGraph = graph
 	}
 	result.configurations = summarizeConfigurations(model)
+	result.enums = summarizeEnums(request.root, model)
 	if diagnostics := model.Diagnostics(); len(diagnostics) != 0 {
 		result.diagnostics = versionDiagnostics(
 			diagnosticadapt.Application(request.root, diagnostics),
@@ -890,6 +910,9 @@ func (service *Service) normalizeRequest(
 			"compiler service validation analysis must not select a target",
 		)
 	}
+	if err := compilerstyle.ValidateProfile(request.Profile); err != nil {
+		return normalizedRequest{}, err
+	}
 	root, err := filepath.Abs(request.WorkspaceRoot)
 	if err != nil {
 		return normalizedRequest{}, fmt.Errorf("resolve compiler service workspace root: %w", err)
@@ -920,6 +943,7 @@ func (service *Service) normalizeRequest(
 		patterns: patterns,
 		overlay:  overlay,
 		mode:     request.Mode,
+		profile:  request.Profile,
 		content:  request.ContentHash,
 		sequence: request.Sequence,
 	}, nil
@@ -1449,6 +1473,7 @@ func (service *Service) cacheKey(
 		Root              string
 		Target            string
 		Mode              AnalysisMode
+		Profile           compilerstyle.Profile
 		Patterns          []string
 		Overlay           map[string]Document
 		Environment       []string
@@ -1461,6 +1486,7 @@ func (service *Service) cacheKey(
 		Root:              normalizedWorkspaceKey(request.root),
 		Target:            request.target,
 		Mode:              request.mode,
+		Profile:           request.profile,
 		Patterns:          request.patterns,
 		Overlay:           request.overlay,
 		Environment:       options.Env,

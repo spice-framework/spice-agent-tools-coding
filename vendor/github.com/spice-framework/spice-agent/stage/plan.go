@@ -93,7 +93,7 @@ func NewToolPlanLease(id PlanID, dispatcher ToolDispatcher, release func() error
 	if err != nil {
 		return nil, fmt.Errorf("snapshot tool plan %q definitions: %w", id, err)
 	}
-	snapshot := &definitionSnapshotDispatcher{delegate: dispatcher, definitions: definitions}
+	snapshot := &definitionSnapshotDispatcher{delegate: dispatcher, definitions: definitions, planID: id}
 	return &ToolPlanLease{
 		id: id, dispatcher: snapshot, definitions: definitions,
 		release: release, releaseDone: make(chan struct{}),
@@ -198,6 +198,10 @@ func NewStaticToolPlanSource(dispatcher ToolDispatcher) (*StaticToolPlanSource, 
 	if dispatcher == nil {
 		return nil, errors.New("static tool plan source requires a dispatcher")
 	}
+	dispatcher, err := ApplyToolDispatchPipeline(dispatcher, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("guard static tool plan: %w", err)
+	}
 	definitions, err := snapshotDefinitions(dispatcher)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot static tool plan: %w", err)
@@ -210,6 +214,76 @@ func NewStaticToolPlanSource(dispatcher ToolDispatcher) (*StaticToolPlanSource, 
 		id:         id,
 		dispatcher: &definitionSnapshotDispatcher{delegate: dispatcher, definitions: definitions},
 	}, nil
+}
+
+// ApplyToolDispatchPipeline installs terminal guards exactly once closest to
+// the merged base, then applies trusted decorators with the first decorator
+// outermost. A composed dispatcher cannot be composed again.
+func ApplyToolDispatchPipeline(
+	base ToolDispatcher,
+	guards []ToolDispatchGuard,
+	decorators []ToolDispatchDecorator,
+) (ToolDispatcher, error) {
+	if base == nil {
+		return nil, errors.New("tool dispatch pipeline requires a base dispatcher")
+	}
+	if _, composed := base.(*composedToolDispatcher); composed {
+		if len(guards) == 0 && len(decorators) == 0 {
+			return base, nil
+		}
+		return nil, errors.New("tool dispatch pipeline is already composed")
+	}
+	definitions, err := snapshotDefinitions(base)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot guarded tool dispatcher: %w", err)
+	}
+	guardCopy := append([]ToolDispatchGuard(nil), guards...)
+	for index, guard := range guardCopy {
+		if guard == nil {
+			return nil, fmt.Errorf("tool dispatch guard %d is nil", index)
+		}
+	}
+	guarded := &guardedToolDispatcher{delegate: base, definitions: definitions, guards: guardCopy}
+	decorated, err := ApplyToolDispatchDecorators(guarded, decorators)
+	if err != nil {
+		return nil, err
+	}
+	return &composedToolDispatcher{delegate: decorated}, nil
+}
+
+type toolDispatchAuthorityContextKey struct{}
+
+type composedToolDispatcher struct{ delegate ToolDispatcher }
+
+func (dispatcher *composedToolDispatcher) Definitions() []tool.Definition {
+	if dispatcher == nil || dispatcher.delegate == nil {
+		return []tool.Definition{}
+	}
+	return dispatcher.delegate.Definitions()
+}
+
+func (dispatcher *composedToolDispatcher) Definition(name string) (tool.Definition, bool) {
+	if dispatcher == nil || dispatcher.delegate == nil {
+		return tool.Definition{}, false
+	}
+	return dispatcher.delegate.Definition(name)
+}
+
+func (dispatcher *composedToolDispatcher) Dispatch(ctx context.Context, scope ToolDispatchScope, call tool.Call, reporter tool.Reporter) (tool.Result, error) {
+	if ctx == nil {
+		return tool.Result{}, errors.New("tool dispatch context must not be nil")
+	}
+	if dispatcher == nil || dispatcher.delegate == nil {
+		return tool.Result{}, errors.New("composed tool dispatcher is nil")
+	}
+	if err := scope.Validate(); err != nil {
+		return tool.Result{}, err
+	}
+	if ctx.Value(toolDispatchAuthorityContextKey{}) != nil {
+		return tool.Result{}, errors.New("tool dispatch re-entry with already-bound authority is forbidden")
+	}
+	bound := context.WithValue(ctx, toolDispatchAuthorityContextKey{}, scope)
+	return dispatcher.delegate.Dispatch(bound, scope, call, reporter)
 }
 
 // LeaseCurrent leases the one static generation.
@@ -278,9 +352,24 @@ func ApplyToolDispatchDecorators(
 	return current, nil
 }
 
+// SnapshotToolDispatcher freezes a dispatcher's declared definitions while
+// preserving its trusted executable behavior. It does not install guards or
+// decorators and therefore is not a substitute for ApplyToolDispatchPipeline.
+func SnapshotToolDispatcher(dispatcher ToolDispatcher) (ToolDispatcher, error) {
+	if dispatcher == nil {
+		return nil, errors.New("tool dispatcher snapshot requires a dispatcher")
+	}
+	definitions, err := snapshotDefinitions(dispatcher)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot tool dispatcher definitions: %w", err)
+	}
+	return &definitionSnapshotDispatcher{delegate: dispatcher, definitions: definitions}, nil
+}
+
 type definitionSnapshotDispatcher struct {
 	delegate    ToolDispatcher
 	definitions []tool.Definition
+	planID      PlanID
 }
 
 func (dispatcher *definitionSnapshotDispatcher) Definitions() []tool.Definition {
@@ -305,6 +394,7 @@ func (dispatcher *definitionSnapshotDispatcher) Definition(name string) (tool.De
 
 func (dispatcher *definitionSnapshotDispatcher) Dispatch(
 	ctx context.Context,
+	scope ToolDispatchScope,
 	call tool.Call,
 	reporter tool.Reporter,
 ) (tool.Result, error) {
@@ -314,10 +404,23 @@ func (dispatcher *definitionSnapshotDispatcher) Dispatch(
 	if err := call.Validate(); err != nil {
 		return tool.Result{}, err
 	}
+	if dispatcher.planID != "" && scope.ToolPlanID() != dispatcher.planID {
+		return tool.Result{}, fmt.Errorf("tool dispatch plan %q does not match leased plan %q", scope.ToolPlanID(), dispatcher.planID)
+	}
 	if _, declared := dispatcher.Definition(call.Name()); !declared {
 		return tool.Result{}, fmt.Errorf("tool %q is not declared by the leased plan", call.Name())
 	}
-	return dispatcher.delegate.Dispatch(ctx, call, reporter)
+	return dispatcher.delegate.Dispatch(ctx, scope, call, reporter)
+}
+
+func definitionFromSnapshot(definitions []tool.Definition, name string) (tool.Definition, bool) {
+	index, found := slices.BinarySearchFunc(definitions, name, func(definition tool.Definition, target string) int {
+		return strings.Compare(definition.Name(), target)
+	})
+	if !found {
+		return tool.Definition{}, false
+	}
+	return definitions[index].Clone(), true
 }
 
 func snapshotDefinitions(dispatcher ToolDispatcher) (definitions []tool.Definition, err error) {

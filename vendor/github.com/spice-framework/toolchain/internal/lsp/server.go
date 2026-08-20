@@ -3,7 +3,7 @@
 // Package lsp implements Spice's editor-neutral Language Server Protocol
 // transport over standard JSON-RPC streams.
 //
-// @Module(allowedDependencies=["github.com/spice-framework/toolchain/compiler::annotationinstall", "github.com/spice-framework/toolchain/compiler::diagnostic", "github.com/spice-framework/toolchain/compiler::parser", "github.com/spice-framework/toolchain/compiler::service"])
+// @Module(allowedDependencies=["github.com/spice-framework/toolchain/compiler::annotationinstall", "github.com/spice-framework/toolchain/compiler::diagnostic", "github.com/spice-framework/toolchain/compiler::parser", "github.com/spice-framework/toolchain/compiler::service", "github.com/spice-framework/toolchain/compiler::style"])
 package lsp
 
 import (
@@ -24,6 +24,7 @@ import (
 
 	"github.com/spice-framework/toolchain/compiler/annotationinstall"
 	compilerservice "github.com/spice-framework/toolchain/compiler/service"
+	compilerstyle "github.com/spice-framework/toolchain/compiler/style"
 )
 
 const (
@@ -68,6 +69,7 @@ type Server struct {
 	writer           *rpcWriter
 	target           string
 	patterns         []string
+	profile          compilerstyle.Profile
 	workspaces       map[string]*workspace
 	documents        map[string]*document
 	requests         map[string]context.CancelFunc
@@ -109,6 +111,7 @@ type workspace struct {
 	hasGood   bool
 	target    string
 	patterns  []string
+	profile   compilerstyle.Profile
 	published map[string]struct{}
 	documents map[string]struct{}
 }
@@ -354,8 +357,9 @@ type workspaceFolder struct {
 }
 
 type analysisSettings struct {
-	Target   string   `json:"target"`
-	Patterns []string `json:"patterns"`
+	Target   string                `json:"target"`
+	Patterns []string              `json:"patterns"`
+	Profile  compilerstyle.Profile `json:"profile"`
 }
 
 func (server *Server) initialize(message rpcMessage) error {
@@ -392,6 +396,7 @@ func (server *Server) initialize(message rpcMessage) error {
 	server.mu.Lock()
 	server.target = settings.Target
 	server.patterns = settings.Patterns
+	server.profile = settings.Profile
 	server.mu.Unlock()
 
 	folders := slices.Clone(params.WorkspaceFolders)
@@ -610,6 +615,7 @@ func (server *Server) addWorkspace(uri string) error {
 		service:   service,
 		target:    server.target,
 		patterns:  slices.Clone(server.patterns),
+		profile:   server.profile,
 		published: make(map[string]struct{}),
 		documents: make(map[string]struct{}),
 	}
@@ -625,11 +631,15 @@ func normalizeAnalysisSettings(
 	result := analysisSettings{
 		Target:   strings.TrimSpace(settings.Target),
 		Patterns: slices.Clone(settings.Patterns),
+		Profile:  settings.Profile,
 	}
 	if result.Target != settings.Target {
 		return analysisSettings{}, errors.New(
 			"LSP application target must be trimmed",
 		)
+	}
+	if err := compilerstyle.ValidateProfile(result.Profile); err != nil {
+		return analysisSettings{}, err
 	}
 	for index, pattern := range result.Patterns {
 		if strings.TrimSpace(pattern) == "" ||

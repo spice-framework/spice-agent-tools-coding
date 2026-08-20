@@ -889,6 +889,10 @@ func writeSourceUnitProvider(
 	}
 	call := aliases[constructor.PackagePath] + "." +
 		constructor.Name + "(" + strings.Join(arguments, ", ") + ")"
+	if constructor.Kind == load.SymbolMethod {
+		call = arguments[0] + "." + constructor.Name +
+			"(" + strings.Join(arguments[1:], ", ") + ")"
+	}
 	switch {
 	case item.ReturnsCleanup && item.ReturnsError:
 		fmt.Fprintf(source, "\tvalue, cleanup, err := %s\n", call)

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spice-framework/spice/annotation/sdk"
+	compilerpolicy "github.com/spice-framework/toolchain/compiler/policy"
 	"github.com/spice-framework/toolchain/compiler/provider"
 )
 
@@ -23,7 +24,14 @@ type generatedComponentField struct {
 
 func generatedComponentFields(
 	providers []provider.Provider,
+	policySets ...[]compilerpolicy.Service,
 ) []generatedComponentField {
+	policyInterfaces := make(map[string]types.Type)
+	for _, policies := range policySets {
+		for _, service := range policies {
+			policyInterfaces[service.Provider.SymbolID] = service.Interface.Type
+		}
+	}
 	type candidate struct {
 		provider provider.Provider
 		index    int
@@ -32,8 +40,12 @@ func generatedComponentFields(
 	var candidates []candidate
 	baseCounts := make(map[string]int)
 	for index, item := range providers {
+		output := item.Output
+		if exposed, found := policyInterfaces[item.SymbolID]; found {
+			output = exposed
+		}
 		if item.Scope != sdk.BeanScopeSingleton ||
-			!publicComponentType(item.Output) {
+			!publicComponentType(output) {
 			continue
 		}
 		base := componentFieldBase(item, index)
@@ -61,12 +73,17 @@ func generatedComponentFields(
 		if used[base] > 1 {
 			fieldName += strconv.Itoa(used[base])
 		}
+		output := candidate.provider.Output
+		_, policyManaged := policyInterfaces[candidate.provider.SymbolID]
+		if policyManaged {
+			output = policyInterfaces[candidate.provider.SymbolID]
+		}
 		fields = append(fields, generatedComponentField{
 			providerID:  candidate.provider.SymbolID,
 			beanName:    candidate.provider.Name,
 			fieldName:   fieldName,
-			output:      candidate.provider.Output,
-			overridable: sourceUnitConstructsProvider(candidate.provider),
+			output:      output,
+			overridable: !policyManaged && sourceUnitConstructsProvider(candidate.provider),
 		})
 	}
 	return fields

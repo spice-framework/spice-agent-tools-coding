@@ -13,6 +13,7 @@ import (
 
 	"github.com/spice-framework/toolchain/compiler/diagnostic"
 	compilerservice "github.com/spice-framework/toolchain/compiler/service"
+	compilerstyle "github.com/spice-framework/toolchain/compiler/style"
 )
 
 type textDocumentItem struct {
@@ -205,11 +206,13 @@ func (server *Server) refreshAll(raw json.RawMessage) {
 	if params.Settings.Spice != nil {
 		server.target = settings.Target
 		server.patterns = slices.Clone(settings.Patterns)
+		server.profile = settings.Profile
 	}
 	for key, workspace := range server.workspaces {
 		if params.Settings.Spice != nil {
 			workspace.target = settings.Target
 			workspace.patterns = slices.Clone(settings.Patterns)
+			workspace.profile = settings.Profile
 		}
 		server.scheduleWorkspaceLocked(key, workspace)
 	}
@@ -244,6 +247,7 @@ type analysisSnapshot struct {
 	root     string
 	target   string
 	patterns []string
+	profile  compilerstyle.Profile
 	sequence uint64
 	overlay  map[string]compilerservice.Document
 	versions map[string]int
@@ -268,6 +272,7 @@ func (server *Server) beginAnalysis(key string, sequence uint64) {
 		root:     workspace.root,
 		target:   workspace.target,
 		patterns: slices.Clone(workspace.patterns),
+		profile:  workspace.profile,
 		sequence: sequence,
 		overlay: make(
 			map[string]compilerservice.Document,
@@ -302,6 +307,7 @@ func (server *Server) beginAnalysis(key string, sequence uint64) {
 			Patterns:      snapshot.patterns,
 			Overlay:       snapshot.overlay,
 			Sequence:      snapshot.sequence,
+			Profile:       snapshot.profile,
 		},
 	)
 	cancel()
