@@ -13,6 +13,7 @@ import (
 	compilercache "github.com/spice-framework/toolchain/compiler/cache"
 	"github.com/spice-framework/toolchain/compiler/controller"
 	compilerevent "github.com/spice-framework/toolchain/compiler/event"
+	compilerpolicy "github.com/spice-framework/toolchain/compiler/policy"
 	"github.com/spice-framework/toolchain/compiler/provider"
 )
 
@@ -22,6 +23,20 @@ func importAliases(
 	asyncTasks []compilerasync.Task,
 	events []compilerevent.Topic,
 	caches []compilercache.Boundary,
+	features commandFeatures,
+) map[string]string {
+	return importAliasesWithPolicies(
+		providers, controllers, asyncTasks, events, caches, nil, features,
+	)
+}
+
+func importAliasesWithPolicies(
+	providers []provider.Provider,
+	controllers []controller.Controller,
+	asyncTasks []compilerasync.Task,
+	events []compilerevent.Topic,
+	caches []compilercache.Boundary,
+	policies []compilerpolicy.Service,
 	features commandFeatures,
 ) map[string]string {
 	aliases := map[string]string{
@@ -67,6 +82,12 @@ func importAliases(
 	if features.caching {
 		aliases[cachePath] = "spicecache"
 	}
+	if features.retry {
+		aliases[retryPath] = "spiceretry"
+	}
+	if features.methodObservation {
+		aliases[observabilityPath] = "spiceobservability"
+	}
 	if usesBeanHandles(providers) {
 		aliases[beanPath] = "spicebean"
 	}
@@ -105,17 +126,19 @@ func importAliases(
 		"spiceobservability":        {},
 		"spiceschedule":             {},
 		"spicesecurity":             {},
+		"spiceretry":                {},
 		"spiceview":                 {},
 		"spiceweb":                  {},
 		"syscall":                   {},
 		"time":                      {},
 	}
-	names := importNames(
+	names := importNamesWithPolicies(
 		providers,
 		controllers,
 		asyncTasks,
 		events,
 		caches,
+		policies,
 		aliases,
 	)
 	paths := make([]string, 0, len(names))
@@ -166,6 +189,20 @@ func importNames(
 	caches []compilercache.Boundary,
 	aliases map[string]string,
 ) map[string]string {
+	return importNamesWithPolicies(
+		providers, controllers, asyncTasks, events, caches, nil, aliases,
+	)
+}
+
+func importNamesWithPolicies(
+	providers []provider.Provider,
+	controllers []controller.Controller,
+	asyncTasks []compilerasync.Task,
+	events []compilerevent.Topic,
+	caches []compilercache.Boundary,
+	policies []compilerpolicy.Service,
+	aliases map[string]string,
+) map[string]string {
 	names := make(map[string]string)
 	addProviderImportNames(names, aliases, providers)
 	for _, item := range controllers {
@@ -186,6 +223,20 @@ func importNames(
 	for _, boundary := range caches {
 		addTypeImportName(names, aliases, boundary.Key)
 		addTypeImportName(names, aliases, boundary.Value)
+	}
+	for _, service := range policies {
+		addTypeImportName(names, aliases, service.Provider.Output)
+		addTypeImportName(names, aliases, service.Interface.Type)
+		for _, method := range service.Methods() {
+			if method.Signature == nil {
+				continue
+			}
+			for _, tuple := range []*types.Tuple{method.Signature.Params(), method.Signature.Results()} {
+				for index := 0; index < tuple.Len(); index++ {
+					addTypeImportName(names, aliases, tuple.At(index).Type())
+				}
+			}
+		}
 	}
 	return names
 }
@@ -258,10 +309,11 @@ func addTypeObjectImportName(
 	names[importPath] = object.Pkg().Name()
 }
 
-func dependencyVariables(
+func dependencyVariablesWithExposure(
 	model application.Model,
 	providers []provider.Provider,
 	aliases map[string]string,
+	exposedVariables map[string]string,
 ) (map[string][]string, error) {
 	edges := make(map[string][]graphEdge)
 	for _, edge := range model.Edges() {
@@ -273,6 +325,9 @@ func dependencyVariables(
 		})
 	}
 	variables, _ := targetProviderVariables(providers)
+	for providerID, variable := range exposedVariables {
+		variables[providerID] = variable
+	}
 	result := make(map[string][]string, len(providers))
 	for _, item := range providers {
 		inputs := make([]string, len(item.Dependencies))

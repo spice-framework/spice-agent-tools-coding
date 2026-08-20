@@ -1,4 +1,4 @@
-# github.com/spice-framework/spice v0.1.0-preview.2
+# github.com/spice-framework/spice v0.1.0-preview.4
 ## explicit; go 1.26.0
 github.com/spice-framework/spice/annotation
 github.com/spice-framework/spice/annotation/sdk
@@ -12,12 +12,13 @@ github.com/spice-framework/spice/security
 github.com/spice-framework/spice/starter
 github.com/spice-framework/spice/validation
 github.com/spice-framework/spice/web
-# github.com/spice-framework/spice-agent v0.1.0-preview.4
+# github.com/spice-framework/spice-agent v0.1.0-preview.7
 ## explicit; go 1.26.0
+github.com/spice-framework/spice-agent/interaction
 github.com/spice-framework/spice-agent/process
 github.com/spice-framework/spice-agent/stage
 github.com/spice-framework/spice-agent/tool
-# github.com/spice-framework/toolchain v0.1.0-preview.1.0.20260806203056-d0b9ac086bd6
+# github.com/spice-framework/toolchain v0.1.0-preview.2
 ## explicit; go 1.26.0
 github.com/spice-framework/toolchain/cmd/spice
 github.com/spice-framework/toolchain/compiler/annotationcatalog
@@ -34,6 +35,7 @@ github.com/spice-framework/toolchain/compiler/controller
 github.com/spice-framework/toolchain/compiler/descriptor
 github.com/spice-framework/toolchain/compiler/diagnostic
 github.com/spice-framework/toolchain/compiler/diagnostic/adapt
+github.com/spice-framework/toolchain/compiler/enum
 github.com/spice-framework/toolchain/compiler/event
 github.com/spice-framework/toolchain/compiler/generate
 github.com/spice-framework/toolchain/compiler/graph
@@ -41,6 +43,7 @@ github.com/spice-framework/toolchain/compiler/lifecycle
 github.com/spice-framework/toolchain/compiler/load
 github.com/spice-framework/toolchain/compiler/modulith
 github.com/spice-framework/toolchain/compiler/parser
+github.com/spice-framework/toolchain/compiler/policy
 github.com/spice-framework/toolchain/compiler/provider
 github.com/spice-framework/toolchain/compiler/resolve
 github.com/spice-framework/toolchain/compiler/scan
@@ -48,6 +51,7 @@ github.com/spice-framework/toolchain/compiler/schedule
 github.com/spice-framework/toolchain/compiler/service
 github.com/spice-framework/toolchain/compiler/signature
 github.com/spice-framework/toolchain/compiler/starter
+github.com/spice-framework/toolchain/compiler/style
 github.com/spice-framework/toolchain/compiler/targetid
 github.com/spice-framework/toolchain/compiler/transaction
 github.com/spice-framework/toolchain/compiler/validate
@@ -69,6 +73,7 @@ golang.org/x/mod/semver
 golang.org/x/sync/errgroup
 # golang.org/x/sys v0.47.0
 ## explicit; go 1.25.0
+golang.org/x/sys/unix
 golang.org/x/sys/windows
 # golang.org/x/tools v0.48.0
 ## explicit; go 1.25.0

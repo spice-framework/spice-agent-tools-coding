@@ -315,7 +315,12 @@ func Build(
 		}
 		controller.routes = append(controller.routes, route)
 	}
-	applyAuthorizations(&catalog, resolution)
+	applyAuthorizations(
+		&catalog,
+		resolution,
+		symbols,
+		providers.Providers(),
+	)
 	finalize(&catalog)
 	return catalog
 }
@@ -325,7 +330,12 @@ type routeLocation struct {
 	route      int
 }
 
-func applyAuthorizations(catalog *Catalog, resolution resolve.Result) {
+func applyAuthorizations(
+	catalog *Catalog,
+	resolution resolve.Result,
+	symbols map[string]load.Symbol,
+	providers []provider.Provider,
+) {
 	routes := make(map[string][]routeLocation)
 	for controllerIndex := range catalog.controllers {
 		for routeIndex, route := range catalog.controllers[controllerIndex].routes {
@@ -340,6 +350,9 @@ func applyAuthorizations(catalog *Catalog, resolution resolve.Result) {
 		if !occurrence.HasContribution(
 			sdk.ContributionAuthorization,
 		) {
+			continue
+		}
+		if serviceOwnedMethod(symbols[occurrence.SymbolID], providers) {
 			continue
 		}
 		if previous, duplicate := seen[occurrence.SymbolID]; duplicate {
@@ -390,6 +403,22 @@ func applyAuthorizations(catalog *Catalog, resolution resolve.Result) {
 		}
 		route.authorization = &authorization
 	}
+}
+
+func serviceOwnedMethod(
+	symbol load.Symbol,
+	providers []provider.Provider,
+) bool {
+	if symbol.Signature == nil || symbol.Signature.Recv() == nil {
+		return false
+	}
+	receiver := symbol.Signature.Recv().Type()
+	for _, item := range providers {
+		if item.Role == "service" && types.Identical(item.Output, receiver) {
+			return true
+		}
+	}
+	return false
 }
 
 func analyzeAuthorization(

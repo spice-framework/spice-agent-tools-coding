@@ -10,6 +10,7 @@ import (
 	diagnosticadapt "github.com/spice-framework/toolchain/compiler/diagnostic/adapt"
 	"github.com/spice-framework/toolchain/compiler/load"
 	compilerservice "github.com/spice-framework/toolchain/compiler/service"
+	compilerstyle "github.com/spice-framework/toolchain/compiler/style"
 )
 
 type diagnosticFormat string
@@ -20,9 +21,11 @@ const (
 )
 
 type verifyArguments struct {
-	format    diagnosticFormat
-	formatSet bool
-	patterns  []string
+	format     diagnosticFormat
+	formatSet  bool
+	patterns   []string
+	profile    compilerstyle.Profile
+	profileSet bool
 }
 
 // NewVerifyHandler constructs the annotation verification command handler.
@@ -84,6 +87,7 @@ func verifyPrepared(
 			WorkspaceRoot: root,
 			Patterns:      arguments.patterns,
 			Mode:          compilerservice.AnalysisValidate,
+			Profile:       arguments.profile,
 		},
 	)
 	closeErr := closeCompilerAnalysisService(service)
@@ -158,6 +162,21 @@ func parseVerifyArguments(arguments []string) (verifyArguments, error) {
 			index = next
 			result.format = diagnosticFormat(value)
 			result.formatSet = true
+		case argument == "--profile" ||
+			strings.HasPrefix(argument, "--profile="):
+			value, next, err := moduleOptionValue(
+				arguments,
+				index,
+				"--profile",
+				result.profileSet,
+				string(compilerstyle.ProfileJavaStructured),
+			)
+			if err != nil {
+				return verifyArguments{}, err
+			}
+			index = next
+			result.profile = compilerstyle.Profile(value)
+			result.profileSet = true
 		case strings.HasPrefix(argument, "-"):
 			return verifyArguments{}, fmt.Errorf(
 				"unknown verification option %q",
@@ -177,6 +196,9 @@ func parseVerifyArguments(arguments []string) (verifyArguments, error) {
 	}
 	if len(result.patterns) == 0 {
 		result.patterns = []string{"./..."}
+	}
+	if err := compilerstyle.ValidateProfile(result.profile); err != nil {
+		return verifyArguments{}, err
 	}
 	return result, nil
 }
@@ -202,6 +224,7 @@ func verificationDiagnosticSummary(
 		"validation":      "annotation validation",
 		"annotation-tool": "annotation tool",
 		"provider":        "provider catalog",
+		"style":           "style profile",
 		"modulith":        "module architecture",
 	}[stage]
 	if stage == "starter" {

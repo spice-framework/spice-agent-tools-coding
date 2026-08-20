@@ -3,7 +3,7 @@
 // Package scaffold creates minimal, valid-Go Spice applications without
 // downloading dependencies or overwriting developer-owned files.
 //
-// @Module(allowedDependencies=["github.com/spice-framework/toolchain/compiler::targetid"])
+// @Module(allowedDependencies=["github.com/spice-framework/toolchain/compiler::style", "github.com/spice-framework/toolchain/compiler::targetid"])
 package scaffold
 
 import (
@@ -11,12 +11,15 @@ import (
 	"errors"
 	"fmt"
 	"go/format"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
+	compilerstyle "github.com/spice-framework/toolchain/compiler/style"
 	"github.com/spice-framework/toolchain/compiler/targetid"
 	"github.com/spice-framework/toolchain/internal/identity"
 	"golang.org/x/mod/modfile"
@@ -48,6 +51,28 @@ type Config struct {
 	// ToolchainReplace is an explicit local development replacement. Scaffold
 	// performs no implicit sibling or workspace discovery.
 	ToolchainReplace string
+	// Profile selects an opt-in source-organization contract.
+	Profile compilerstyle.Profile
+}
+
+// DeclarationKind identifies one conservative typed source scaffold.
+type DeclarationKind string
+
+const (
+	DeclarationModule     DeclarationKind = "module"
+	DeclarationService    DeclarationKind = "service"
+	DeclarationRepository DeclarationKind = "repository"
+	DeclarationController DeclarationKind = "controller"
+	DeclarationComponent  DeclarationKind = "component"
+	DeclarationEnum       DeclarationKind = "enum"
+)
+
+// DeclarationConfig is one source declaration scaffold request.
+type DeclarationConfig struct {
+	Directory string
+	Package   string
+	Kind      DeclarationKind
+	Name      string
 }
 
 // Result identifies the created application and its deterministic files.
@@ -82,6 +107,72 @@ func Create(ctx context.Context, config Config) (Result, error) {
 	return apply(ctx, validated.Directory, files)
 }
 
+// CreateDeclaration writes one deterministic source declaration without
+// overwriting an existing file or invoking external tools.
+func CreateDeclaration(ctx context.Context, config DeclarationConfig) (Result, error) {
+	if ctx == nil {
+		return Result{}, errors.New("declaration scaffold context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	validated, err := validateDeclarationConfig(config)
+	if err != nil {
+		return Result{}, err
+	}
+	planned, err := renderDeclaration(validated)
+	if err != nil {
+		return Result{}, err
+	}
+	createdDirectories, err := prepareDeclarationDirectory(validated.Directory)
+	if err != nil {
+		return Result{}, err
+	}
+	root, err := os.OpenRoot(validated.Directory)
+	if err != nil {
+		return Result{}, errors.Join(
+			fmt.Errorf("open declaration scaffold directory: %w", err),
+			cleanupDirectories(createdDirectories),
+		)
+	}
+	created, writeErr := writeDeclarationFile(ctx, root, planned)
+	closeErr := root.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		rollbackErr := rollback(validated.Directory, created, false)
+		cleanupErr := cleanupDirectories(createdDirectories)
+		return Result{}, errors.Join(err, rollbackErr, cleanupErr)
+	}
+	return Result{
+		Directory: validated.Directory,
+		Files:     []string{planned.name},
+	}, nil
+}
+
+func writeDeclarationFile(
+	ctx context.Context,
+	root *os.Root,
+	planned plannedFile,
+) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	name := filepath.Clean(filepath.FromSlash(planned.name))
+	if filepath.Base(name) != name || name == "." {
+		return nil, fmt.Errorf("invalid declaration scaffold file path %q", planned.name)
+	}
+	file, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, planned.mode)
+	if err != nil {
+		return nil, fmt.Errorf("create declaration scaffold file %s: %w", name, err)
+	}
+	created := []string{name}
+	writeErr := writeAll(file, planned.content)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return created, fmt.Errorf("write declaration scaffold file %s: %w", name, err)
+	}
+	return created, nil
+}
+
 func validateConfig(config Config) (Config, error) {
 	if strings.TrimSpace(config.Directory) == "" {
 		return Config{}, errors.New("scaffold directory is required")
@@ -100,6 +191,9 @@ func validateConfig(config Config) (Config, error) {
 			"toolchain version %q must be an exact semantic version such as v0.2.0",
 			config.ToolchainVersion,
 		)
+	}
+	if err := compilerstyle.ValidateProfile(config.Profile); err != nil {
+		return Config{}, err
 	}
 	absolute, err := filepath.Abs(config.Directory)
 	if err != nil {
@@ -172,6 +266,34 @@ func main() {
 	if err != nil {
 		return nil, fmt.Errorf("format scaffold main.go: %w", err)
 	}
+	mainName := "main.go"
+	patterns := "."
+	profileOption := ""
+	files := []plannedFile{
+		{name: ".gitignore", content: []byte("/bin/\n"), mode: 0o600},
+		{name: "go.mod", content: moduleContent, mode: 0o600},
+	}
+	if config.Profile == compilerstyle.ProfileJavaStructured {
+		packageName := strings.ToLower(targetName[:1]) + targetName[1:]
+		if !token.IsIdentifier(packageName) {
+			packageName = "application"
+		}
+		mainName = filepath.ToSlash(filepath.Join("cmd", packageName, "main.go"))
+		patterns = "./..."
+		profileOption = " --profile=java-structured"
+		packageContent := fmt.Sprintf(`// @import { Module } from %q
+
+// Package %s is the root application module.
+//
+// @Module
+package %s
+`, FrameworkModule+"/annotation/modulith", packageName, packageName)
+		files = append(files, plannedFile{
+			name:    filepath.ToSlash(filepath.Join("internal", packageName, "package.go")),
+			content: []byte(packageContent),
+			mode:    0o600,
+		})
+	}
 	readme := fmt.Sprintf(`# %s
 
 This application uses valid Go source and committed, inspectable Spice output.
@@ -180,17 +302,145 @@ then verify and generate the application:
 
 `+"```text"+`
 go mod download
-go tool %s generate --target %s .
-go tool %s verify .
-go tool %s run --target %s .
+go tool %s generate --target %s %s
+go tool %s verify%s %s
+go tool %s run --target %s %s
 `+"```"+`
-`, config.Module, CLITool, targetName, CLITool, CLITool, targetName)
-	return []plannedFile{
-		{name: ".gitignore", content: []byte("/bin/\n"), mode: 0o600},
-		{name: "README.md", content: []byte(readme), mode: 0o600},
-		{name: "go.mod", content: moduleContent, mode: 0o600},
-		{name: "main.go", content: mainContent, mode: 0o600},
+`, config.Module, CLITool, targetName, patterns, CLITool, profileOption, patterns, CLITool, targetName, patterns)
+	files = append(
+		files,
+		plannedFile{name: "README.md", content: []byte(readme), mode: 0o600},
+		plannedFile{name: mainName, content: mainContent, mode: 0o600},
+	)
+	return files, nil
+}
+
+func validateDeclarationConfig(config DeclarationConfig) (DeclarationConfig, error) {
+	if strings.TrimSpace(config.Directory) == "" {
+		return DeclarationConfig{}, errors.New("declaration scaffold directory is required")
+	}
+	if !slices.Contains([]DeclarationKind{
+		DeclarationModule,
+		DeclarationService,
+		DeclarationRepository,
+		DeclarationController,
+		DeclarationComponent,
+		DeclarationEnum,
+	}, config.Kind) {
+		return DeclarationConfig{}, fmt.Errorf("unsupported declaration scaffold kind %q", config.Kind)
+	}
+	absolute, err := filepath.Abs(config.Directory)
+	if err != nil {
+		return DeclarationConfig{}, fmt.Errorf("resolve declaration scaffold directory: %w", err)
+	}
+	config.Directory = filepath.Clean(absolute)
+	if config.Package == "" {
+		config.Package = filepath.Base(config.Directory)
+	}
+	if !token.IsIdentifier(config.Package) {
+		return DeclarationConfig{}, fmt.Errorf("package name %q is not a valid Go identifier", config.Package)
+	}
+	if config.Kind == DeclarationModule {
+		if config.Name == "" {
+			config.Name = config.Package
+		}
+		return config, nil
+	}
+	if !token.IsIdentifier(config.Name) || !unicode.IsUpper([]rune(config.Name)[0]) {
+		return DeclarationConfig{}, fmt.Errorf(
+			"%s name %q must be an exported Go identifier",
+			config.Kind,
+			config.Name,
+		)
+	}
+	return config, nil
+}
+
+func renderDeclaration(config DeclarationConfig) (plannedFile, error) {
+	if config.Kind == DeclarationModule {
+		content := fmt.Sprintf(`// @import { Module } from %q
+
+// Package %s is an application module.
+//
+// @Module
+package %s
+`, FrameworkModule+"/annotation/modulith", config.Package, config.Package)
+		return plannedFile{name: "package.go", content: []byte(content), mode: 0o600}, nil
+	}
+	annotationName := map[DeclarationKind]string{
+		DeclarationService:    "Service",
+		DeclarationRepository: "Repository",
+		DeclarationController: "Controller",
+		DeclarationComponent:  "Component",
+		DeclarationEnum:       "Enum",
+	}[config.Kind]
+	annotationPackage := FrameworkModule + "/annotation/core"
+	declaration := fmt.Sprintf(`// @import { %s } from %q
+
+package %s
+
+// @%s
+type %s struct{}
+
+// New%s constructs %s.
+func New%s() *%s {
+	return &%s{}
+}
+`, annotationName, annotationPackage, config.Package, annotationName, config.Name, config.Name, config.Name, config.Name, config.Name, config.Name)
+	if config.Kind == DeclarationController {
+		annotationPackage = FrameworkModule + "/annotation/web"
+		declaration = fmt.Sprintf(`// @import { Controller, Get } from %q
+
+package %s
+
+import "net/http"
+
+// @Controller
+type %s struct{}
+
+// New%s constructs %s.
+func New%s() *%s {
+	return &%s{}
+}
+
+// @Get("/")
+func (*%s) Index(http.ResponseWriter, *http.Request) {}
+`, annotationPackage, config.Package, config.Name, config.Name, config.Name, config.Name, config.Name, config.Name, config.Name)
+	}
+	if config.Kind == DeclarationEnum {
+		declaration = fmt.Sprintf(`// @import { Enum } from %q
+
+package %s
+
+// @Enum
+type %s string
+
+const %sUnknown %s = "unknown"
+`, annotationPackage, config.Package, config.Name, config.Name, config.Name)
+	}
+	content, err := format.Source([]byte(declaration))
+	if err != nil {
+		return plannedFile{}, fmt.Errorf("format %s scaffold: %w", config.Kind, err)
+	}
+	return plannedFile{
+		name:    goFileName(config.Name) + ".go",
+		content: content,
+		mode:    0o600,
 	}, nil
+}
+
+func goFileName(name string) string {
+	runes := []rune(name)
+	var result strings.Builder
+	for index, current := range runes {
+		if unicode.IsUpper(current) && index > 0 &&
+			(unicode.IsLower(runes[index-1]) ||
+				(index+1 < len(runes) && unicode.IsLower(runes[index+1]))) {
+			result.WriteByte('_')
+		}
+		result.WriteRune(unicode.ToLower(current))
+	}
+	return result.String()
 }
 
 func applicationTargetName(modulePath string) string {
@@ -319,29 +569,81 @@ func writePlannedFiles(
 		if err := ctx.Err(); err != nil {
 			return created, err
 		}
+		cleanName := filepath.Clean(filepath.FromSlash(planned.name))
+		if cleanName == "." || filepath.IsAbs(cleanName) || cleanName == ".." ||
+			strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			return created, fmt.Errorf("invalid scaffold file path %q", planned.name)
+		}
+		parent := filepath.Dir(cleanName)
+		if parent != "." {
+			if err := root.MkdirAll(parent, 0o750); err != nil {
+				return created, fmt.Errorf("create scaffold directory %s: %w", parent, err)
+			}
+		}
 		file, err := root.OpenFile(
-			planned.name,
+			cleanName,
 			os.O_WRONLY|os.O_CREATE|os.O_EXCL,
 			planned.mode,
 		)
 		if err != nil {
 			return created, fmt.Errorf("create scaffold file %s: %w", planned.name, err)
 		}
-		created = append(created, planned.name)
+		created = append(created, cleanName)
 		writeErr := writeAll(file, planned.content)
 		closeErr := file.Close()
 		if err := errors.Join(writeErr, closeErr); err != nil {
 			return created, fmt.Errorf("write scaffold file %s: %w", planned.name, err)
 		}
 	}
-	entries, err := os.ReadDir(root.Name())
+	actual, err := scaffoldEntries(root.Name())
 	if err != nil {
 		return created, fmt.Errorf("verify scaffold destination: %w", err)
 	}
-	if len(entries) != len(files) {
+	expected := plannedEntries(files)
+	if !slices.Equal(actual, expected) {
 		return created, errors.New("scaffold destination changed while files were being created")
 	}
 	return created, nil
+}
+
+func scaffoldEntries(directory string) ([]string, error) {
+	var result []string
+	err := filepath.WalkDir(directory, func(name string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if name == directory {
+			return nil
+		}
+		relative, err := filepath.Rel(directory, name)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			relative += string(filepath.Separator)
+		}
+		result = append(result, relative)
+		return nil
+	})
+	slices.Sort(result)
+	return result, err
+}
+
+func plannedEntries(files []plannedFile) []string {
+	unique := make(map[string]struct{})
+	for _, planned := range files {
+		name := filepath.Clean(filepath.FromSlash(planned.name))
+		unique[name] = struct{}{}
+		for parent := filepath.Dir(name); parent != "."; parent = filepath.Dir(parent) {
+			unique[parent+string(filepath.Separator)] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(unique))
+	for name := range unique {
+		result = append(result, name)
+	}
+	slices.Sort(result)
+	return result
 }
 
 func rollback(directory string, names []string, removeDirectory bool) error {
@@ -352,9 +654,70 @@ func rollback(directory string, names []string, removeDirectory bool) error {
 			problems = append(problems, fmt.Errorf("remove %s: %w", name, err))
 		}
 	}
+	parents := make(map[string]struct{})
+	for _, name := range names {
+		for parent := filepath.Dir(name); parent != "."; parent = filepath.Dir(parent) {
+			parents[parent] = struct{}{}
+		}
+	}
+	parentNames := make([]string, 0, len(parents))
+	for parent := range parents {
+		parentNames = append(parentNames, parent)
+	}
+	slices.SortFunc(parentNames, func(left, right string) int {
+		return strings.Count(right, string(filepath.Separator)) - strings.Count(left, string(filepath.Separator))
+	})
+	for _, parent := range parentNames {
+		if err := os.Remove(filepath.Join(directory, parent)); err != nil &&
+			!errors.Is(err, os.ErrNotExist) {
+			problems = append(problems, fmt.Errorf("remove %s: %w", parent, err))
+		}
+	}
 	if removeDirectory {
 		if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
 			problems = append(problems, fmt.Errorf("remove scaffold directory: %w", err))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func prepareDeclarationDirectory(directory string) ([]string, error) {
+	var missing []string
+	current := directory
+	for {
+		info, err := os.Lstat(current)
+		switch {
+		case err == nil:
+			if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+				return nil, fmt.Errorf("declaration scaffold parent %q is not a real directory", current)
+			}
+			created := make([]string, 0, len(missing))
+			for _, name := range slices.Backward(missing) {
+				if mkdirErr := os.Mkdir(name, 0o750); mkdirErr != nil {
+					cleanupErr := cleanupDirectories(created)
+					return nil, errors.Join(fmt.Errorf("create declaration scaffold directory: %w", mkdirErr), cleanupErr)
+				}
+				created = append(created, name)
+			}
+			return created, nil
+		case errors.Is(err, os.ErrNotExist):
+			missing = append(missing, current)
+			parent := filepath.Dir(current)
+			if parent == current {
+				return nil, fmt.Errorf("find declaration scaffold parent for %q", directory)
+			}
+			current = parent
+		default:
+			return nil, fmt.Errorf("inspect declaration scaffold directory: %w", err)
+		}
+	}
+}
+
+func cleanupDirectories(directories []string) error {
+	var problems []error
+	for _, directory := range slices.Backward(directories) {
+		if err := os.Remove(directory); err != nil && !errors.Is(err, os.ErrNotExist) {
+			problems = append(problems, fmt.Errorf("remove directory %s: %w", directory, err))
 		}
 	}
 	return errors.Join(problems...)

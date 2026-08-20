@@ -55,6 +55,19 @@ func cloneConfigurations(items []Configuration) []Configuration {
 	return result
 }
 
+func cloneEnums(items []Enum) []Enum {
+	result := make([]Enum, len(items))
+	for index, item := range items {
+		result[index] = item
+		result[index].Members = slices.Clone(item.Members)
+		if item.Location.Display != nil {
+			display := *item.Location.Display
+			result[index].Location.Display = &display
+		}
+	}
+	return result
+}
+
 func cloneGoInterfaceCatalog(
 	catalog GoInterfaceCatalog,
 ) GoInterfaceCatalog {
@@ -144,6 +157,7 @@ func cloneResult(result Result) Result {
 	result.autoConfigs = slices.Clone(result.autoConfigs)
 	result.moduleGraph = cloneModuleGraph(result.moduleGraph)
 	result.configurations = cloneConfigurations(result.configurations)
+	result.enums = cloneEnums(result.enums)
 	result.goInterfaces = cloneGoInterfaceCatalog(result.goInterfaces)
 	result.definitions = cloneDefinitions(result.definitions)
 	result.actions = cloneActions(result.actions)

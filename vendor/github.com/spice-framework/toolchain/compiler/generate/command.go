@@ -33,22 +33,25 @@ type modelHashBootstrapEntryPoint struct {
 }
 
 type commandFeatures struct {
-	endpoints        []compilerbootstrap.Endpoint
-	managementAccess string
-	management       bool
-	logging          bool
-	metrics          bool
-	configProps      bool
-	modules          bool
-	hasMux           bool
-	authorization    bool
-	scheduling       bool
-	asynchronous     bool
-	transactions     bool
-	events           bool
-	caching          bool
-	httpObservation  bool
-	requestScope     bool
+	endpoints         []compilerbootstrap.Endpoint
+	managementAccess  string
+	management        bool
+	logging           bool
+	metrics           bool
+	configProps       bool
+	modules           bool
+	hasMux            bool
+	authorization     bool
+	scheduling        bool
+	asynchronous      bool
+	transactions      bool
+	events            bool
+	caching           bool
+	methodPolicies    bool
+	retry             bool
+	methodObservation bool
+	httpObservation   bool
+	requestScope      bool
 }
 
 func commandFeaturesFor(

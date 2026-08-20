@@ -101,7 +101,11 @@ func Build(
 	routes := routeIndex(controllers)
 	managerProviderID := transactionManagerProvider(providers.Providers())
 	annotated := make(map[string]struct{})
-	occurrences := transactionOccurrences(resolution)
+	occurrences := transactionOccurrences(
+		program,
+		resolution,
+		providers.Providers(),
+	)
 	for _, routeID := range sortedOccurrenceIDs(occurrences) {
 		routeOccurrences := occurrences[routeID]
 		if len(routeOccurrences) == 0 {
@@ -228,13 +232,16 @@ func Build(
 }
 
 func transactionOccurrences(
+	program *load.Program,
 	resolution resolve.Result,
+	providers []provider.Provider,
 ) map[string][]resolve.Occurrence {
 	result := make(map[string][]resolve.Occurrence)
+	serviceMethods := serviceMethodIDs(program, providers)
 	for _, occurrence := range resolution.Occurrences {
 		if occurrence.HasContribution(
 			sdk.ContributionTransaction,
-		) {
+		) && !serviceMethods[occurrence.SymbolID] {
 			result[occurrence.SymbolID] = append(
 				result[occurrence.SymbolID],
 				occurrence,
@@ -251,6 +258,31 @@ func transactionOccurrences(
 			return occurrences[left].PhysicalOffset <
 				occurrences[right].PhysicalOffset
 		})
+	}
+	return result
+}
+
+func serviceMethodIDs(
+	program *load.Program,
+	providers []provider.Provider,
+) map[string]bool {
+	result := make(map[string]bool)
+	if program == nil {
+		return result
+	}
+	for _, symbol := range program.Symbols() {
+		if symbol.Signature == nil || symbol.Signature.Recv() == nil {
+			continue
+		}
+		for _, item := range providers {
+			if item.Role == "service" && types.Identical(
+				item.Output,
+				symbol.Signature.Recv().Type(),
+			) {
+				result[symbol.ID] = true
+				break
+			}
+		}
 	}
 	return result
 }

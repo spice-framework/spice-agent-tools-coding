@@ -210,6 +210,44 @@ func summarizeConfigurations(model application.Model) []Configuration {
 	return result
 }
 
+func summarizeEnums(
+	workspaceRoot string,
+	model application.Model,
+) []Enum {
+	items := model.Enums()
+	result := make([]Enum, len(items))
+	for index, item := range items {
+		members := item.Members()
+		summaries := make([]EnumMember, len(members))
+		for memberIndex, member := range members {
+			summaries[memberIndex] = EnumMember{
+				Name:  member.Name,
+				Value: member.Value,
+			}
+		}
+		result[index] = Enum{
+			SymbolID:    item.SymbolID,
+			Name:        item.Name,
+			PackagePath: item.PackagePath,
+			TypeID:      item.TypeID,
+			Underlying:  item.Underlying,
+			Location: diagnostic.SourceMappedLocation(
+				workspaceRoot,
+				item.Position.Filename,
+				item.PhysicalPosition.Filename,
+				item.Position.Line,
+				item.Position.Column,
+				item.Position.Offset,
+				item.PhysicalPosition.Line,
+				item.PhysicalPosition.Column,
+				item.PhysicalPosition.Offset,
+			),
+			Members: summaries,
+		}
+	}
+	return result
+}
+
 func summarizeDefinitions(
 	workspaceRoot string,
 	registry annotation.Registry,

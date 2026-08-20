@@ -17,6 +17,7 @@ import (
 	"github.com/spice-framework/toolchain/compiler/provider"
 	"github.com/spice-framework/toolchain/compiler/resolve"
 	"github.com/spice-framework/toolchain/compiler/starter"
+	"github.com/spice-framework/toolchain/compiler/style"
 	"github.com/spice-framework/toolchain/compiler/validate"
 )
 
@@ -111,6 +112,25 @@ func Provider(
 	items []provider.Diagnostic,
 ) diagnostic.Set {
 	return providerSet(workspaceRoot, "provider", items)
+}
+
+// Style converts optional source-profile diagnostics.
+func Style(
+	workspaceRoot string,
+	items []style.Diagnostic,
+) diagnostic.Set {
+	result := make([]diagnostic.Diagnostic, len(items))
+	for index, item := range items {
+		result[index] = sourceDiagnostic(
+			workspaceRoot,
+			"style",
+			item.Kind,
+			item.Message,
+			item.Position,
+			item.PhysicalPosition,
+		)
+	}
+	return diagnostic.NewSet(result...)
 }
 
 // StarterProviders converts provider diagnostics originating from explicitly

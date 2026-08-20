@@ -606,6 +606,7 @@ func verificationStageLabel(stage application.Stage) string {
 		application.StageLifecycle:     "lifecycle hook",
 		application.StageSchedule:      "scheduled method",
 		application.StageAsync:         "asynchronous method",
+		application.StagePolicy:        "service method policy",
 		application.StageTransaction:   "transaction boundary",
 		application.StageCache:         "cache boundary",
 		application.StageEvent:         "event contract",
